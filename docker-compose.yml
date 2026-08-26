@@ -16,5 +16,22 @@ services:
     volumes:
       - radar-data:/app/data
 
+  # Automação low-code (card 29, seção 17 do PRD) - webhook do GitHub ->
+  # n8n -> POST /analyze na aplicação -> resultado distribuído no Discord.
+  # Toda a lógica de análise/classificação mora na aplicação (serviço
+  # "radar" acima); o n8n só encaminha o gatilho e distribui o resultado.
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_SECURE_COOKIE=false
+      - RADAR_API_URL=${RADAR_API_URL:-http://radar:8000}
+      - RADAR_APPROVAL_URL=${RADAR_APPROVAL_URL:-http://localhost:8000}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+    volumes:
+      - n8n-data:/home/node/.n8n
+
 volumes:
   radar-data:
+  n8n-data:
