@@ -32,6 +32,7 @@ from src.domain.risk import (
 from src.graph import prompts
 from src.graph.llm import build_chat_model
 from src.graph.state import AgentState, EvidenceSource, Requirement
+from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
 from src.mcp_server.tools.search_code import search_code
 
 logger = logging.getLogger(__name__)
@@ -127,9 +128,20 @@ def retrieve_rag(state: AgentState) -> dict:
 
 
 def fetch_history(state: AgentState) -> dict:
-    """Stub de RF-03.3: GitHub API real chega no card 9."""
-    time.sleep(STUB_IO_LATENCY_SECONDS)
-    return {"change_history": []}
+    """RF-03.3: commits e PRs reais via API do GitHub. RF-03.4: cada
+    resultado vira uma entrada em `evidence_sources`."""
+    requirement = state["requirement"]
+    search_terms = requirement.search_terms if requirement else []
+    if not search_terms:
+        return {"change_history": [], "evidence_sources": []}
+
+    entries = _fetch_history(
+        search_terms,
+        repo=os.getenv("GITHUB_REPO", ""),
+        github_token=os.getenv("GITHUB_TOKEN", ""),
+    )
+    evidence = [EvidenceSource(type="history", ref=entry.ref) for entry in entries]
+    return {"change_history": entries, "evidence_sources": evidence}
 
 
 def analyze_impact(state: AgentState) -> dict:

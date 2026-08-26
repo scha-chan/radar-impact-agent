@@ -216,7 +216,7 @@ A suíte padrão não depende do Ollama estar rodando — o LLM é mockado nos t
 
 ```bash
 RUN_OLLAMA_TESTS=1 python -m pytest tests/integration/test_extract_requirement_ollama.py -v
-RUN_GITHUB_TESTS=1 python -m pytest tests/integration/test_search_code_github.py -v
+RUN_GITHUB_TESTS=1 python -m pytest tests/integration/test_search_code_github.py tests/integration/test_fetch_history_github.py -v
 ```
 
 ### Executando o grafo diretamente
@@ -234,7 +234,7 @@ resultado = graph.invoke(state)
 print(resultado["requirement"].feature_type, resultado["risk_level"], resultado["confidence"])
 ```
 
-`extract_requirement` e `search_codebase` já são reais (LLM e API do GitHub); RAG e histórico ainda são stub (listas vazias). Sem um `GITHUB_TOKEN`/`GITHUB_REPO` configurados, ou se o Code Search do GitHub ainda não indexou o arquivo procurado (atraso de indexação é normal em repositórios novos), a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — comportamento esperado até o card 13 (RAG) e o card 9 (histórico) substituírem os stubs restantes.
+`extract_requirement`, `search_codebase` e `fetch_history` já são reais (LLM e API do GitHub); só o RAG (card 13) ainda é stub. Sem um `GITHUB_TOKEN`/`GITHUB_REPO` configurados, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado (atraso de indexação é normal em repositórios novos), a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — comportamento esperado até o card 13 substituir o último stub.
 
 ### Servidor MCP
 
@@ -242,4 +242,4 @@ print(resultado["requirement"].feature_type, resultado["risk_level"], resultado[
 python -m src.mcp_server.server
 ```
 
-Sobe o servidor MCP via stdio. Tool registrada até aqui: `search_code` (card 08). `fetch_history` e `publish_comment` chegam nos cards 9 e 10.
+Sobe o servidor MCP via stdio. Tools registradas até aqui: `search_code` (card 08), `fetch_history` (card 09). `publish_comment` chega no card 10.

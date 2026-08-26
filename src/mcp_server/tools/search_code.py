@@ -3,20 +3,20 @@ do requisito e retorna arquivos e trechos.
 
 Usa a API de busca de código do GitHub (`/search/code`), que exige
 autenticação mesmo para repositórios públicos. RF-03.5: timeout de 10s e
-até 2 retries com backoff por termo buscado; um termo que esgota as
-tentativas é pulado (fallback) — a tool nunca lança exceção para o grafo,
-na pior das hipóteses retorna lista vazia.
+até 2 retries com backoff por termo buscado (ver `_http.get_with_retry`);
+um termo que esgota as tentativas é pulado (fallback) — a tool nunca lança
+exceção para o grafo, na pior das hipóteses retorna lista vazia.
 """
 
 from __future__ import annotations
 
 import logging
-import time
 
 import httpx
 
 from src import config  # noqa: F401 - carrega .env como efeito colateral do import
 from src.graph.state import CodeMatch
+from src.mcp_server.tools._http import get_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,14 @@ def search_code(
 
     with httpx.Client(base_url=GITHUB_API_BASE, headers=headers, timeout=timeout_seconds) as client:
         for term in search_terms[:max_terms]:
-            for item in _search_term_with_retry(client, term, repo, max_retries):
+            data = get_with_retry(
+                client,
+                "/search/code",
+                {"q": f"{term} repo:{repo}", "per_page": 5},
+                max_retries=max_retries,
+                log_context={"tool": "search_code", "term": term},
+            )
+            for item in (data or {}).get("items", []):
                 path = item.get("path", "")
                 if not path or path in seen_files:
                     continue
@@ -61,31 +68,6 @@ def search_code(
                     return matches
 
     return matches
-
-
-def _search_term_with_retry(
-    client: httpx.Client, term: str, repo: str, max_retries: int
-) -> list[dict]:
-    query = f"{term} repo:{repo}"
-    attempts = max_retries + 1
-    backoff = 0.5
-
-    for attempt in range(attempts):
-        try:
-            response = client.get("/search/code", params={"q": query, "per_page": 5})
-            response.raise_for_status()
-            return response.json().get("items", [])
-        except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.TransportError) as exc:
-            logger.warning(
-                "search_code_term_failed",
-                extra={"term": term, "attempt": attempt, "error": str(exc)},
-            )
-            if attempt < attempts - 1:
-                time.sleep(backoff)
-                backoff *= 2
-
-    logger.error("search_code_term_exhausted_retries", extra={"term": term})
-    return []
 
 
 def _extract_snippet(item: dict) -> str:
