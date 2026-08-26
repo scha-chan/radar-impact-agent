@@ -35,16 +35,28 @@ from src.domain.risk import (
 from src.graph import prompts
 from src.graph.llm import build_chat_model
 from src.governance.permissions import PermissionDeniedError
+from src.governance.tool_executor import ToolExecutor
 from src.graph.state import AgentState, EvidenceSource, Requirement
+from src.mcp_server.tools.fetch_history import FETCH_HISTORY_PERMISSION
 from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
+from src.mcp_server.tools.publish_comment import PUBLISH_COMMENT_PERMISSION
 from src.mcp_server.tools.publish_comment import publish_comment as _publish_comment
-from src.mcp_server.tools.search_code import search_code
+from src.mcp_server.tools.search_code import SEARCH_CODE_PERMISSION, search_code
 from src.rag.retriever import retrieve_patterns
 
 logger = logging.getLogger(__name__)
 
 CONFIDENCE_THRESHOLD = int(os.getenv("CONFIDENCE_THRESHOLD", "70"))
 APPROVAL_TTL_HOURS = int(os.getenv("APPROVAL_TTL_HOURS", "24"))
+
+# RF-08.2 generalizado (card 17, seção 13 do PRD): toda tool com efeito
+# externo (busca no GitHub, publicação) passa por aqui. retrieve_rag não
+# está registrada por não ser uma tool MCP externa (é ChromaDB local, sem
+# side effect fora do processo) — ver docstring de retrieve_rag.
+_tool_executor = ToolExecutor()
+_tool_executor.register(SEARCH_CODE_PERMISSION)
+_tool_executor.register(FETCH_HISTORY_PERMISSION)
+_tool_executor.register(PUBLISH_COMMENT_PERMISSION)
 
 _SEVERITY_BY_NAME = {s.name: s for s in Severity}
 _PROBABILITY_BY_NAME = {p.name: p for p in Probability}
@@ -123,11 +135,15 @@ def search_codebase(state: AgentState) -> dict:
         return {"code_matches": [], "evidence_sources": [], "tools_failed": []}
 
     failures: list[str] = []
-    matches = search_code(
-        search_terms,
-        repo=os.getenv("GITHUB_REPO", ""),
-        github_token=os.getenv("GITHUB_TOKEN", ""),
-        failures=failures,
+    matches = _tool_executor.execute(
+        "search_code",
+        state,
+        lambda: search_code(
+            search_terms,
+            repo=os.getenv("GITHUB_REPO", ""),
+            github_token=os.getenv("GITHUB_TOKEN", ""),
+            failures=failures,
+        ),
     )
     evidence = [EvidenceSource(type="code", ref=match.file) for match in matches]
     tools_failed = ["search_code"] if failures else []
@@ -140,7 +156,12 @@ def retrieve_rag(state: AgentState) -> dict:
     `evidence_sources`. Sem `search_terms`, usa o texto bruto do requisito
     como consulta — ainda ha algo para comparar semanticamente com o corpus,
     diferente de search_codebase/fetch_history, que dependem de termos
-    exatos para buscar na API do GitHub."""
+    exatos para buscar na API do GitHub.
+
+    Não passa pelo `ToolExecutor` (card 17): `retrieve_patterns` é ChromaDB
+    local, sem chamada de API externa nem ação destrutiva — não é uma tool
+    registrada no servidor MCP (`mcp_server/server.py`) como search_code/
+    fetch_history/publish_comment são."""
     requirement = state["requirement"]
     if requirement is None:
         return {"impact_patterns": [], "evidence_sources": []}
@@ -161,11 +182,15 @@ def fetch_history(state: AgentState) -> dict:
         return {"change_history": [], "evidence_sources": [], "tools_failed": []}
 
     failures: list[str] = []
-    entries = _fetch_history(
-        search_terms,
-        repo=os.getenv("GITHUB_REPO", ""),
-        github_token=os.getenv("GITHUB_TOKEN", ""),
-        failures=failures,
+    entries = _tool_executor.execute(
+        "fetch_history",
+        state,
+        lambda: _fetch_history(
+            search_terms,
+            repo=os.getenv("GITHUB_REPO", ""),
+            github_token=os.getenv("GITHUB_TOKEN", ""),
+            failures=failures,
+        ),
     )
     evidence = [EvidenceSource(type="history", ref=entry.ref) for entry in entries]
     tools_failed = ["fetch_history"] if failures else []
@@ -289,15 +314,23 @@ def route_after_approval(state: AgentState) -> str:
 
 def publish_comment(state: AgentState) -> dict:
     """RF-08: publica o parecer (ou grava em arquivo se DRY_RUN/sem Issue).
-    Protegido por RF-08.2/RF-08.3 — ver `governance.permissions.authorize`.
+    Protegido em duas camadas (RF-08.2/RF-08.3, card 17): o `ToolExecutor`
+    recusaria a chamada se `publish_comment` não estivesse registrada; a
+    própria tool (`mcp_server/tools/publish_comment.py`) chama `authorize()`
+    de novo internamente, então continua segura mesmo se chamada fora do
+    grafo (é o que `tests/unit/test_publish_comment.py` testa direto).
     """
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
     try:
-        url = _publish_comment(
+        url = _tool_executor.execute(
+            "publish_comment",
             state,
-            repo=os.getenv("GITHUB_REPO", ""),
-            github_token=os.getenv("GITHUB_TOKEN", ""),
-            dry_run=dry_run,
+            lambda: _publish_comment(
+                state,
+                repo=os.getenv("GITHUB_REPO", ""),
+                github_token=os.getenv("GITHUB_TOKEN", ""),
+                dry_run=dry_run,
+            ),
         )
     except PermissionDeniedError as exc:
         logger.error("publish_comment_denied", extra={"error": str(exc)})

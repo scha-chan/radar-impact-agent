@@ -15,12 +15,18 @@ import logging
 import httpx
 
 from src import config  # noqa: F401 - carrega .env como efeito colateral do import
+from src.governance.permissions import ToolPermission
 from src.graph.state import CodeMatch
 from src.mcp_server.tools._http import get_with_retry
 
 logger = logging.getLogger(__name__)
 
 GITHUB_API_BASE = "https://api.github.com"
+
+# RF-08.2/card 17: leitura, não destrutiva — nunca exige aprovação humana,
+# mas ainda precisa estar registrada no ToolExecutor (graph/nodes.py) para
+# ser chamável; sem isso, a chamada é recusada mesmo sem nada de perigoso.
+SEARCH_CODE_PERMISSION = ToolPermission(name="search_code", permission="read:code", destructive=False)
 
 
 def search_code(
