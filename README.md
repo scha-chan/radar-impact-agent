@@ -262,3 +262,26 @@ python -m src.mcp_server.server
 ```
 
 Sobe o servidor MCP via stdio. Tools registradas: `search_code` (card 08), `fetch_history` (card 09). `publish_comment` (card 10) existe em `src/mcp_server/tools/publish_comment.py` mas **não** é exposta como tool MCP — ela precisa do `AgentState` inteiro para validar a autorização (RF-08.2/RF-08.3), algo que um client MCP externo não pode fornecer com segurança; é chamada só pelo node do grafo.
+
+### Automação low-code (n8n)
+
+Fluxo (seção 17 do PRD, card 29): Issue com o label `analise-impacto` → webhook do GitHub → **n8n** → `POST /analyze` na aplicação → resultado distribuído como card no **Discord**, com o resumo do parecer e um link para o painel de aprovação. Toda a lógica de análise, classificação e decisão de autonomia mora na aplicação — o n8n só encaminha o gatilho e distribui o resultado; nenhuma regra de negócio vive no workflow.
+
+Workflow exportado: [`docs/lowcode/workflow-n8n.json`](docs/lowcode/workflow-n8n.json).
+
+**Reproduzindo localmente:**
+
+1. Suba o n8n (já incluso no `docker-compose.yml`):
+
+   ```bash
+   docker compose up n8n
+   ```
+
+2. Abra `http://localhost:5678`, crie a conta local de admin (primeira execução) e importe `docs/lowcode/workflow-n8n.json` (**Workflows → Import from File**).
+3. Configure as variáveis de ambiente do n8n (`docker-compose.yml` já repassa `RADAR_API_URL`, `RADAR_APPROVAL_URL` e `DISCORD_WEBHOOK_URL` do seu `.env`):
+   - `DISCORD_WEBHOOK_URL` — crie um webhook num canal do seu servidor Discord (Configurações do Canal → Integrações → Webhooks) e cole a URL aqui. **Nunca** commite essa URL — ela vai só no seu `.env` local.
+   - `RADAR_API_URL`/`RADAR_APPROVAL_URL` — apontam para a API do RADAR (card 30, endpoint `/analyze` ainda a implementar).
+4. No node **GitHub Webhook**, copie a "Production URL" gerada pelo n8n e configure no repositório (**Settings → Webhooks → Add webhook**), evento `Issues`, `Content type: application/json`.
+5. Ative o workflow (toggle **Active**) e crie uma Issue com o label `analise-impacto` para testar.
+
+**Limitação conhecida deste card:** o node `POST /analyze` chama um endpoint que ainda não existe (card 30) — o fluxo está montado e documentado ponta a ponta, mas o teste end-to-end real (Issue → Discord) só é possível depois que a API for implementada. Também não foi possível validar a subida do container `n8n` localmente neste ambiente de desenvolvimento (Docker indisponível, mesma limitação já registrada no card 25 para `docker build`).
