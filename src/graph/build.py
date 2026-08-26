@@ -13,6 +13,7 @@ from langgraph.types import Send
 
 from src.graph import nodes
 from src.graph.state import AgentState
+from src.observability.logging import log_node_execution
 
 
 def _route_after_guard(state: AgentState):
@@ -36,18 +37,26 @@ def build_graph(checkpointer=None):
     """
     graph = StateGraph(AgentState)
 
-    graph.add_node("extract_requirement", nodes.extract_requirement)
-    graph.add_node("guard_adversarial", nodes.guard_adversarial)
-    graph.add_node("block", nodes.block)
-    graph.add_node("search_codebase", nodes.search_codebase)
-    graph.add_node("retrieve_rag", nodes.retrieve_rag)
-    graph.add_node("fetch_history", nodes.fetch_history)
-    graph.add_node("analyze_impact", nodes.analyze_impact)
-    graph.add_node("score_risk", nodes.score_risk)
-    graph.add_node("decide_autonomy", nodes.decide_autonomy)
-    graph.add_node("human_approval", nodes.human_approval)
-    graph.add_node("publish_comment", nodes.publish_comment)
-    graph.add_node("archive", nodes.archive)
+    # RF-09.1 (card 19): todo node passa por log_node_execution — um único
+    # ponto de instrumentação em vez de cada node logar sua própria entrada
+    # e saída, para o log ficar uniforme (mesmos campos, sempre) e não
+    # exigir tocar nodes.py sempre que um node novo for adicionado.
+    node_fns: dict[str, object] = {
+        "extract_requirement": nodes.extract_requirement,
+        "guard_adversarial": nodes.guard_adversarial,
+        "block": nodes.block,
+        "search_codebase": nodes.search_codebase,
+        "retrieve_rag": nodes.retrieve_rag,
+        "fetch_history": nodes.fetch_history,
+        "analyze_impact": nodes.analyze_impact,
+        "score_risk": nodes.score_risk,
+        "decide_autonomy": nodes.decide_autonomy,
+        "human_approval": nodes.human_approval,
+        "publish_comment": nodes.publish_comment,
+        "archive": nodes.archive,
+    }
+    for name, fn in node_fns.items():
+        graph.add_node(name, log_node_execution(name, fn))
 
     graph.add_edge(START, "extract_requirement")
     graph.add_edge("extract_requirement", "guard_adversarial")
