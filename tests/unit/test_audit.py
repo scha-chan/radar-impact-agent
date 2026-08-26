@@ -40,7 +40,9 @@ def test_record_audit_creates_parent_directory(tmp_path):
 def test_record_audit_appends_without_truncating(tmp_path):
     path = tmp_path / "trail.jsonl"
     record_audit(AuditRecord(session_id="s1", decision="ESCALATED", actor="system"), path=str(path))
-    record_audit(AuditRecord(session_id="s1", decision="AUTO_PUBLISHED", actor="system"), path=str(path))
+    record_audit(
+        AuditRecord(session_id="s1", decision="AUTO_PUBLISHED", actor="system"), path=str(path)
+    )
 
     lines = path.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 2
@@ -65,8 +67,12 @@ def test_record_audit_includes_reason_only_when_present(tmp_path):
 def test_read_audit_trail_filters_by_session_id_and_preserves_order(tmp_path):
     path = tmp_path / "trail.jsonl"
     record_audit(AuditRecord(session_id="s1", decision="ESCALATED", actor="system"), path=str(path))
-    record_audit(AuditRecord(session_id="s2", decision="BLOCKED_ADVERSARIAL", actor="system"), path=str(path))
-    record_audit(AuditRecord(session_id="s1", decision="APPROVED_PUBLISHED", actor="human"), path=str(path))
+    record_audit(
+        AuditRecord(session_id="s2", decision="BLOCKED_ADVERSARIAL", actor="system"), path=str(path)
+    )
+    record_audit(
+        AuditRecord(session_id="s1", decision="APPROVED_PUBLISHED", actor="human"), path=str(path)
+    )
 
     entries = read_audit_trail("s1", path=str(path))
 
@@ -89,7 +95,9 @@ def test_read_audit_trail_skips_blank_lines(tmp_path):
     record_audit(AuditRecord(session_id="s1", decision="ESCALATED", actor="system"), path=str(path))
     with path.open("a", encoding="utf-8") as f:
         f.write("\n")
-    record_audit(AuditRecord(session_id="s1", decision="AUTO_PUBLISHED", actor="system"), path=str(path))
+    record_audit(
+        AuditRecord(session_id="s1", decision="AUTO_PUBLISHED", actor="system"), path=str(path)
+    )
 
     entries = read_audit_trail("s1", path=str(path))
 

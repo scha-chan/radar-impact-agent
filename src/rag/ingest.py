@@ -83,7 +83,9 @@ def main() -> None:
     client = get_client()
     collection = get_or_create_collection(client, build_embedding_function())
     count = ingest_corpus(collection)
-    logger.info("rag_ingest_completed", extra={"chunks": count, "collection_total": collection.count()})
+    logger.info(
+        "rag_ingest_completed", extra={"chunks": count, "collection_total": collection.count()}
+    )
 
 
 if __name__ == "__main__":

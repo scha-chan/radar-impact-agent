@@ -72,12 +72,24 @@ def test_retrieve_patterns_filters_by_feature_type():
         ids=["login#1", "upload#1"],
         documents=["login sessão senha", "upload arquivo"],
         metadatas=[
-            {"feature_type": "login", "area": "authentication", "pattern_name": "p1", "source": "login#1"},
-            {"feature_type": "upload", "area": "storage", "pattern_name": "p2", "source": "upload#1"},
+            {
+                "feature_type": "login",
+                "area": "authentication",
+                "pattern_name": "p1",
+                "source": "login#1",
+            },
+            {
+                "feature_type": "upload",
+                "area": "storage",
+                "pattern_name": "p2",
+                "source": "upload#1",
+            },
         ],
     )
 
-    patterns = retrieve_patterns("login", "login sessão senha", collection=collection, similarity_threshold=0.0)
+    patterns = retrieve_patterns(
+        "login", "login sessão senha", collection=collection, similarity_threshold=0.0
+    )
 
     assert len(patterns) == 1
     assert patterns[0].source == "login#1"
@@ -88,7 +100,9 @@ def test_retrieve_patterns_discards_results_below_similarity_threshold():
     collection.upsert(
         ids=["login#1"],
         documents=["upload arquivo"],  # nao compartilha nenhum token com a query
-        metadatas=[{"feature_type": "login", "area": "x", "pattern_name": "p1", "source": "login#1"}],
+        metadatas=[
+            {"feature_type": "login", "area": "x", "pattern_name": "p1", "source": "login#1"}
+        ],
     )
 
     patterns = retrieve_patterns(
@@ -146,7 +160,9 @@ def test_retrieve_patterns_lazily_builds_and_caches_the_default_collection(monke
     collection.upsert(
         ids=["login#1"],
         documents=["login senha sessão"],
-        metadatas=[{"feature_type": "login", "area": "x", "pattern_name": "p1", "source": "login#1"}],
+        metadatas=[
+            {"feature_type": "login", "area": "x", "pattern_name": "p1", "source": "login#1"}
+        ],
     )
     calls = {"get_client": 0, "get_or_create_collection": 0, "ingest_corpus": 0}
 
@@ -159,10 +175,10 @@ def test_retrieve_patterns_lazily_builds_and_caches_the_default_collection(monke
     monkeypatch.setattr(
         retriever_module,
         "get_or_create_collection",
-        lambda client, ef: calls.update(
-            get_or_create_collection=calls["get_or_create_collection"] + 1
-        )
-        or collection,
+        lambda client, ef: (
+            calls.update(get_or_create_collection=calls["get_or_create_collection"] + 1)
+            or collection
+        ),
     )
     monkeypatch.setattr(retriever_module, "build_embedding_function", _HashEmbeddingFunction)
     monkeypatch.setattr(

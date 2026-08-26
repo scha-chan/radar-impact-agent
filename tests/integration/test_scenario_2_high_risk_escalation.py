@@ -77,8 +77,7 @@ def _mock_evidence_and_analysis(monkeypatch):
             "risks": [
                 Risk(
                     description=(
-                        "Usuários existentes sem segundo fator cadastrado podem ficar "
-                        "sem acesso"
+                        "Usuários existentes sem segundo fator cadastrado podem ficar sem acesso"
                     ),
                     severity="HIGH",
                     probability="LIKELY",

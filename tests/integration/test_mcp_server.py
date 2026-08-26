@@ -75,7 +75,9 @@ async def test_fetch_history_tool_returns_entries_as_dicts(monkeypatch):
     )
     server = build_server()
 
-    result = await server.call_tool("fetch_history", {"search_terms": ["risk"], "repo": "owner/repo"})
+    result = await server.call_tool(
+        "fetch_history", {"search_terms": ["risk"], "repo": "owner/repo"}
+    )
 
     assert result.structured_content["result"] == [
         {"type": "pr", "ref": "PR #7", "description": "x"}

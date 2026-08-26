@@ -46,7 +46,9 @@ def test_scenario_1_high_confidence_evidence_publishes_automatically(tmp_path, m
         nodes,
         "search_code",
         lambda *_a, **_k: [
-            CodeMatch(file="src/orders/orders_repository.py", snippet="def list_orders(...):", line=12)
+            CodeMatch(
+                file="src/orders/orders_repository.py", snippet="def list_orders(...):", line=12
+            )
         ],
     )
     monkeypatch.setattr(
@@ -64,7 +66,9 @@ def test_scenario_1_high_confidence_evidence_publishes_automatically(tmp_path, m
         nodes,
         "_fetch_history",
         lambda *_a, **_k: [
-            HistoryEntry(type="pr", ref="PR #99", description="Ajuste recente na listagem de pedidos")
+            HistoryEntry(
+                type="pr", ref="PR #99", description="Ajuste recente na listagem de pedidos"
+            )
         ],
     )
 

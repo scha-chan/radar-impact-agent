@@ -26,7 +26,9 @@ GITHUB_API_BASE = "https://api.github.com"
 # RF-08.2/card 17: leitura, não destrutiva — nunca exige aprovação humana,
 # mas ainda precisa estar registrada no ToolExecutor (graph/nodes.py) para
 # ser chamável; sem isso, a chamada é recusada mesmo sem nada de perigoso.
-SEARCH_CODE_PERMISSION = ToolPermission(name="search_code", permission="read:code", destructive=False)
+SEARCH_CODE_PERMISSION = ToolPermission(
+    name="search_code", permission="read:code", destructive=False
+)
 
 
 def search_code(

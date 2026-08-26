@@ -42,7 +42,9 @@ def build_server() -> MCPServer:
     @mcp_server.tool()
     def fetch_history(search_terms: list[str], repo: str) -> list[dict]:
         """Busca commits e PRs recentes de um repositório GitHub relacionados aos termos."""
-        entries = _fetch_history(search_terms, repo=repo, github_token=os.getenv("GITHUB_TOKEN", ""))
+        entries = _fetch_history(
+            search_terms, repo=repo, github_token=os.getenv("GITHUB_TOKEN", "")
+        )
         return [entry.model_dump() for entry in entries]
 
     return mcp_server

@@ -16,7 +16,10 @@ def test_fetch_history_parses_commits_and_prs():
             200,
             json={
                 "items": [
-                    {"sha": "abcdef1234567890", "commit": {"message": "fix: corrige matriz de risco\n\ndetalhes"}}
+                    {
+                        "sha": "abcdef1234567890",
+                        "commit": {"message": "fix: corrige matriz de risco\n\ndetalhes"},
+                    }
                 ]
             },
         )
@@ -79,8 +82,7 @@ def test_fetch_history_respects_max_results():
             200,
             json={
                 "items": [
-                    {"sha": f"{i:07x}" + "0" * 33, "commit": {"message": "x"}}
-                    for i in range(20)
+                    {"sha": f"{i:07x}" + "0" * 33, "commit": {"message": "x"}} for i in range(20)
                 ]
             },
         )

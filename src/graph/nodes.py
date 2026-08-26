@@ -298,12 +298,14 @@ def decide_autonomy(state: AgentState) -> dict:
     registradas em `publish_comment`, não aqui, porque só valem depois que
     a publicação de fato acontece (a autorização ainda pode ser negada).
     """
-    requires_review = state["risk_level"] == "CRITICAL" or (
-        state["confidence"] or 0
-    ) < CONFIDENCE_THRESHOLD
+    requires_review = (
+        state["risk_level"] == "CRITICAL" or (state["confidence"] or 0) < CONFIDENCE_THRESHOLD
+    )
     update: dict = {"human_review_required": requires_review}
     if requires_review:
-        update["approval_expires_at"] = datetime.now(timezone.utc) + timedelta(hours=APPROVAL_TTL_HOURS)
+        update["approval_expires_at"] = datetime.now(timezone.utc) + timedelta(
+            hours=APPROVAL_TTL_HOURS
+        )
         record_audit(
             AuditRecord(
                 session_id=state["session_id"],
@@ -356,7 +358,10 @@ def human_approval(state: AgentState) -> dict:
     if _is_approval_expired(state):
         logger.warning(
             "human_approval_expired",
-            extra={"session_id": state["session_id"], "expires_at": str(state["approval_expires_at"])},
+            extra={
+                "session_id": state["session_id"],
+                "expires_at": str(state["approval_expires_at"]),
+            },
         )
         return {"approval_decision": "REJECTED"}
     decision = interrupt(
