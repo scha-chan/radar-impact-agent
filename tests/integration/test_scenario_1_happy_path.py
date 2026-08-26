@@ -11,8 +11,6 @@ objetivo deste teste validar a API do GitHub nem o Ollama), mas o grafo
 roda de ponta a ponta de verdade.
 """
 
-from unittest.mock import MagicMock
-
 from src.graph import nodes
 from src.graph.build import build_graph
 from src.graph.state import (
@@ -23,6 +21,7 @@ from src.graph.state import (
     Requirement,
     create_initial_state,
 )
+from tests.helpers import mock_llm
 
 REQUIREMENT_TEXT = (
     "Adicionar um filtro por intervalo de data na listagem de pedidos, "
@@ -36,14 +35,12 @@ def test_scenario_1_high_confidence_evidence_publishes_automatically(tmp_path, m
     # o repo com audit/dry_run/.
     monkeypatch.chdir(tmp_path)
 
-    fake_requirement = Requirement(
-        text=REQUIREMENT_TEXT,
+    mock_llm(
+        monkeypatch,
         feature_type="listagem",
         search_terms=["pedidos", "listagem"],
+        requirement_text=REQUIREMENT_TEXT,
     )
-    chat_model = MagicMock()
-    chat_model.with_structured_output.return_value.invoke.return_value = fake_requirement
-    monkeypatch.setattr(nodes, "build_chat_model", lambda **_: chat_model)
 
     monkeypatch.setattr(
         nodes,

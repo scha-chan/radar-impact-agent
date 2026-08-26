@@ -12,7 +12,7 @@ card 6), search_codebase/fetch_history (GitHub API, cards 8-9),
 retrieve_rag (ChromaDB, card 13 — ja real), analyze_impact (LLM, card 14
 do LLM — ainda pendente), human_approval (interrupt + checkpointer, card
 15 — ja real), publish_comment (GitHub API, card 10), guard_adversarial
-(detector real, card 18).
+(detector real, card 18 — ja real).
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from src.domain.risk import (
 )
 from src.graph import prompts
 from src.graph.llm import build_chat_model
+from src.governance.adversarial import AdversarialVerdict, detect_by_pattern, render_block_message
 from src.governance.permissions import PermissionDeniedError
 from src.governance.tool_executor import ToolExecutor
 from src.graph.state import AgentState, EvidenceSource, Requirement
@@ -108,11 +109,54 @@ def extract_requirement(state: AgentState) -> dict:
 
 
 def guard_adversarial(state: AgentState) -> dict:
-    """Stub de RF-06.3: detector real chega no card 18."""
+    """RF-06.3 (card 18, cenário 3): duas camadas de detecção no node — a
+    terceira (contenção arquitetural) já existe estruturalmente, porque
+    `score_risk` (cards 02/04) é Python puro e nunca é decidido pelo LLM.
+
+    Camada 1, `detect_by_pattern` (determinística, sem custo): roda
+    primeiro. Camada 2 (LLM) só é chamada se a camada 1 não encontrar nada
+    — evita gastar uma chamada de modelo em casos óbvios.
+
+    Falha na chamada da camada 2 (Ollama fora do ar, etc.) resulta em
+    `is_adversarial=False` (fail-open) — decisão consciente: a garantia
+    real do sistema é a camada 3, não esta. Bloquear tudo sempre que o LLM
+    de checagem estiver indisponível seria trocar disponibilidade por uma
+    proteção que já existe de outra forma.
+    """
+    raw_requirement = state["raw_requirement"]
+
+    pattern_check = detect_by_pattern(raw_requirement)
+    if pattern_check.is_adversarial:
+        logger.warning("adversarial_detected_by_pattern", extra={"reason": pattern_check.reason})
+        return {"is_adversarial": True, "adversarial_reason": pattern_check.reason}
+
+    prompt = prompts.build_guard_adversarial_prompt(raw_requirement)
+    try:
+        structured_llm = build_chat_model().with_structured_output(AdversarialVerdict)
+        verdict = structured_llm.invoke(prompt)
+    except Exception as exc:  # noqa: BLE001 - fail-open documentado acima
+        logger.warning("guard_adversarial_llm_failed", extra={"error": str(exc)})
+        return {"is_adversarial": False, "adversarial_reason": None}
+
+    if verdict.is_adversarial:
+        logger.warning("adversarial_detected_by_llm", extra={"reason": verdict.reason})
+        return {"is_adversarial": True, "adversarial_reason": verdict.reason}
     return {"is_adversarial": False, "adversarial_reason": None}
 
 
 def block(state: AgentState) -> dict:
+    """Cenário 3: nenhuma tool de escrita é chamada a partir daqui — o
+    grafo desvia direto para `END` (ver `_route_after_guard`,
+    `graph/build.py`). A mensagem no formato da seção 12 do PRD é gerada
+    para o log estruturado (a trilha de auditoria completa é o card 20); a
+    API (card 30) reaproveita `render_block_message` para a resposta.
+    """
+    reason = state["adversarial_reason"] or "conteúdo bloqueado por política de segurança."
+    block_message = render_block_message(reason)
+    logger.warning(
+        "adversarial_blocked",
+        extra={"session_id": state["session_id"], "block_message": block_message},
+    )
     return {}
 
 
