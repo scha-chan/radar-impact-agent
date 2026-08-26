@@ -133,6 +133,16 @@ def test_confidence_caps_mitigation_deduction_at_15():
     assert calculate_confidence(inputs) == 85
 
 
+def test_confidence_treats_empty_string_mitigation_as_missing():
+    # Code review do PR #2 (card 24): mitigation="" e mitigation=None
+    # tem que ser equivalentes (ambos falsy) - trava isso com um teste
+    # explicito para uma futura mudanca de `if not r.mitigation` para
+    # `if r.mitigation is None` quebrar aqui, nao silenciosamente.
+    risks = [RiskItem("r1", Severity.LOW, Probability.RARE, mitigation="")]
+    inputs = _full_confidence_inputs(risks=risks)
+    assert calculate_confidence(inputs) == 95
+
+
 def test_confidence_floor_is_zero():
     inputs = _full_confidence_inputs(
         requirement_word_count=2,
