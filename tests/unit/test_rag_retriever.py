@@ -9,6 +9,7 @@ import itertools
 import chromadb
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
 
+from src.rag import retriever as retriever_module
 from src.rag.ingest import get_or_create_collection, ingest_corpus
 from src.rag.retriever import retrieve_patterns
 
@@ -135,3 +136,63 @@ def test_retrieve_patterns_falls_back_to_empty_when_query_fails():
     result = retrieve_patterns("login", "algo", collection=_BrokenCollection())
 
     assert result == []
+
+
+def test_retrieve_patterns_lazily_builds_and_caches_the_default_collection(monkeypatch):
+    # Sem `collection` explicito, retrieve_patterns usa _get_collection() -
+    # o caminho lazy que a producao usa de verdade (ChromaDB persistente +
+    # Ollama, card 13). Mocado aqui para nao depender de rede/disco.
+    collection = _build_collection()
+    collection.upsert(
+        ids=["login#1"],
+        documents=["login senha sessão"],
+        metadatas=[{"feature_type": "login", "area": "x", "pattern_name": "p1", "source": "login#1"}],
+    )
+    calls = {"get_client": 0, "get_or_create_collection": 0, "ingest_corpus": 0}
+
+    monkeypatch.setattr(retriever_module, "_collection", None)
+    monkeypatch.setattr(
+        retriever_module,
+        "get_client",
+        lambda: calls.update(get_client=calls["get_client"] + 1) or object(),
+    )
+    monkeypatch.setattr(
+        retriever_module,
+        "get_or_create_collection",
+        lambda client, ef: calls.update(
+            get_or_create_collection=calls["get_or_create_collection"] + 1
+        )
+        or collection,
+    )
+    monkeypatch.setattr(retriever_module, "build_embedding_function", _HashEmbeddingFunction)
+    monkeypatch.setattr(
+        retriever_module,
+        "ingest_corpus",
+        lambda coll: calls.update(ingest_corpus=calls["ingest_corpus"] + 1),
+    )
+
+    patterns = retrieve_patterns("login", "login senha sessão", similarity_threshold=0.0)
+
+    assert patterns
+    assert calls == {"get_client": 1, "get_or_create_collection": 1, "ingest_corpus": 0}
+
+    # segunda chamada reusa o singleton cacheado no modulo - nao reconstroi o client.
+    retrieve_patterns("login", "login senha sessão", similarity_threshold=0.0)
+    assert calls["get_client"] == 1
+
+
+def test_retrieve_patterns_ingests_corpus_when_default_collection_is_empty(monkeypatch):
+    empty_collection = _build_collection()
+
+    monkeypatch.setattr(retriever_module, "_collection", None)
+    monkeypatch.setattr(retriever_module, "get_client", lambda: object())
+    monkeypatch.setattr(
+        retriever_module, "get_or_create_collection", lambda client, ef: empty_collection
+    )
+    monkeypatch.setattr(retriever_module, "build_embedding_function", _HashEmbeddingFunction)
+    ingested = []
+    monkeypatch.setattr(retriever_module, "ingest_corpus", lambda coll: ingested.append(coll))
+
+    retrieve_patterns("login", "login senha sessão", similarity_threshold=0.0)
+
+    assert ingested == [empty_collection]

@@ -1,7 +1,7 @@
 import chromadb
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
 
-from src.rag.ingest import get_or_create_collection, ingest_corpus
+from src.rag.ingest import get_client, get_or_create_collection, ingest_corpus
 
 
 class _FakeEmbeddingFunction(EmbeddingFunction):
@@ -51,3 +51,12 @@ def test_ingest_corpus_returns_zero_for_empty_directory(tmp_path):
 
     assert count == 0
     assert collection.count() == 0
+
+
+def test_get_client_returns_a_usable_persistent_client(tmp_path):
+    client = get_client(str(tmp_path / "chroma-data"))
+    collection = get_or_create_collection(client, _FakeEmbeddingFunction(), name="smoke")
+
+    collection.upsert(ids=["a"], documents=["x"], metadatas=[{"feature_type": "login"}])
+
+    assert collection.count() == 1

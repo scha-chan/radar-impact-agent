@@ -82,3 +82,15 @@ def test_read_audit_trail_returns_empty_list_for_unknown_session(tmp_path):
     record_audit(AuditRecord(session_id="s1", decision="ESCALATED", actor="system"), path=str(path))
 
     assert read_audit_trail("s-desconhecida", path=str(path)) == []
+
+
+def test_read_audit_trail_skips_blank_lines(tmp_path):
+    path = tmp_path / "trail.jsonl"
+    record_audit(AuditRecord(session_id="s1", decision="ESCALATED", actor="system"), path=str(path))
+    with path.open("a", encoding="utf-8") as f:
+        f.write("\n")
+    record_audit(AuditRecord(session_id="s1", decision="AUTO_PUBLISHED", actor="system"), path=str(path))
+
+    entries = read_audit_trail("s1", path=str(path))
+
+    assert [e["decision"] for e in entries] == ["ESCALATED", "AUTO_PUBLISHED"]

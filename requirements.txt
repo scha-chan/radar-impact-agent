@@ -1,4 +1,5 @@
 pytest==9.1.1
+pytest-cov==7.1.0
 pydantic==2.13.4
 langgraph==1.2.11
 langchain-ollama==1.1.0

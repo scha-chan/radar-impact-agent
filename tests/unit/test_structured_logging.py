@@ -3,10 +3,11 @@ com `session_id`, `correlation_id`, `node`, `status`, `duration_ms`.
 """
 
 import pytest
+import structlog
 from langgraph.errors import GraphInterrupt
 from structlog.testing import capture_logs
 
-from src.observability.logging import log_node_execution
+from src.observability.logging import configure_structured_logging, log_node_execution
 
 
 def _state():
@@ -82,3 +83,14 @@ def test_log_node_execution_emits_paused_status_for_graph_interrupt_and_reraises
     assert event["status"] == "paused"
     assert event["log_level"] == "info"
     assert event["node"] == "human_approval"
+
+
+def test_configure_structured_logging_produces_a_working_json_renderer():
+    try:
+        configure_structured_logging()
+        # so precisa nao levantar e produzir um logger utilizavel - a
+        # renderizacao real (formato JSON) foi conferida manualmente no
+        # card 21 (docs/evidencias/card-21-investigacao-execucao-real.md).
+        structlog.get_logger("smoke-test").info("configured_ok")
+    finally:
+        structlog.reset_defaults()

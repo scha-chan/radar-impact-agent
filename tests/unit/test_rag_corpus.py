@@ -76,3 +76,15 @@ def test_load_corpus_over_real_knowledge_dir_has_at_least_50_chunks():
     assert "outro" not in feature_types
     assert "login" in feature_types
     assert all(doc.area for doc in documents), "todo padrão real deve ter Área preenchida"
+
+
+def test_parse_file_area_is_empty_string_when_field_is_missing(tmp_path):
+    path = tmp_path / "login.md"
+    path.write_text(
+        "## Padrão sem área\n\n**Descrição:** sem o campo Área.\n",
+        encoding="utf-8",
+    )
+
+    document = parse_file(path)[0]
+
+    assert document.area == ""
