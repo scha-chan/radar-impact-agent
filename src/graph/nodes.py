@@ -37,6 +37,7 @@ from src.graph.llm import build_chat_model
 from src.governance.adversarial import AdversarialVerdict, detect_by_pattern, render_block_message
 from src.governance.permissions import PermissionDeniedError
 from src.governance.tool_executor import ToolExecutor
+from src.observability.audit import AuditRecord, record_audit
 from src.graph.state import AgentState, EvidenceSource, Requirement
 from src.mcp_server.tools.fetch_history import FETCH_HISTORY_PERMISSION
 from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
@@ -148,14 +149,23 @@ def block(state: AgentState) -> dict:
     """Cenário 3: nenhuma tool de escrita é chamada a partir daqui — o
     grafo desvia direto para `END` (ver `_route_after_guard`,
     `graph/build.py`). A mensagem no formato da seção 12 do PRD é gerada
-    para o log estruturado (a trilha de auditoria completa é o card 20); a
-    API (card 30) reaproveita `render_block_message` para a resposta.
+    para o log estruturado; a API (card 30) reaproveita
+    `render_block_message` para a resposta. RF-09.3 (card 20): registra
+    `BLOCKED_ADVERSARIAL` na trilha de auditoria, com o trecho ofensor.
     """
     reason = state["adversarial_reason"] or "conteúdo bloqueado por política de segurança."
     block_message = render_block_message(reason)
     logger.warning(
         "adversarial_blocked",
         extra={"session_id": state["session_id"], "block_message": block_message},
+    )
+    record_audit(
+        AuditRecord(
+            session_id=state["session_id"],
+            decision="BLOCKED_ADVERSARIAL",
+            actor="system",
+            reason=state["adversarial_reason"],
+        )
     )
     return {}
 
@@ -282,6 +292,11 @@ def decide_autonomy(state: AgentState) -> dict:
     passada; `decide_autonomy` roda normalmente antes da pausa, então é o
     lugar certo para gravar `approval_expires_at` antes do checkpointer
     congelar o state.
+
+    RF-09.3 (card 20): a decisão `ESCALATED` é registrada aqui — é onde a
+    decisão de fato acontece. `AUTO_PUBLISHED`/`APPROVED_PUBLISHED` são
+    registradas em `publish_comment`, não aqui, porque só valem depois que
+    a publicação de fato acontece (a autorização ainda pode ser negada).
     """
     requires_review = state["risk_level"] == "CRITICAL" or (
         state["confidence"] or 0
@@ -289,6 +304,16 @@ def decide_autonomy(state: AgentState) -> dict:
     update: dict = {"human_review_required": requires_review}
     if requires_review:
         update["approval_expires_at"] = datetime.now(timezone.utc) + timedelta(hours=APPROVAL_TTL_HOURS)
+        record_audit(
+            AuditRecord(
+                session_id=state["session_id"],
+                decision="ESCALATED",
+                actor="system",
+                risk_level=state["risk_level"],
+                confidence=state["confidence"],
+                threshold=CONFIDENCE_THRESHOLD,
+            )
+        )
     return update
 
 
@@ -363,6 +388,15 @@ def publish_comment(state: AgentState) -> dict:
     própria tool (`mcp_server/tools/publish_comment.py`) chama `authorize()`
     de novo internamente, então continua segura mesmo se chamada fora do
     grafo (é o que `tests/unit/test_publish_comment.py` testa direto).
+
+    RF-09.3 (card 20): registrado só depois da publicação de fato
+    acontecer — `AUTO_PUBLISHED` (`human_review_required=False`, decisão do
+    sistema sozinho) ou `APPROVED_PUBLISHED` (um humano aprovou antes,
+    cards 15/16). Uma negação de permissão também é uma decisão de
+    autonomia auditável: `PUBLISH_DENIED` cobre o caso (não deveria
+    acontecer em operação normal — indicaria um bug na checagem anterior
+    de `decide_autonomy`/`human_approval` — mas se acontecer, fica
+    registrado, não silencioso).
     """
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
     try:
@@ -378,9 +412,47 @@ def publish_comment(state: AgentState) -> dict:
         )
     except PermissionDeniedError as exc:
         logger.error("publish_comment_denied", extra={"error": str(exc)})
+        record_audit(
+            AuditRecord(
+                session_id=state["session_id"],
+                decision="PUBLISH_DENIED",
+                actor="system",
+                reason=str(exc),
+            )
+        )
         return {"published_comment_url": None}
+
+    record_audit(
+        AuditRecord(
+            session_id=state["session_id"],
+            decision="APPROVED_PUBLISHED" if state["human_review_required"] else "AUTO_PUBLISHED",
+            actor="human" if state["human_review_required"] else "system",
+            risk_level=state["risk_level"],
+            confidence=state["confidence"],
+            tool_authorized="publish_comment",
+        )
+    )
     return {"published_comment_url": url}
 
 
 def archive(state: AgentState) -> dict:
+    """RF-09.3 (card 20): registra o arquivamento. Distingue rejeição
+    humana explícita de expiração de prazo (card 16) reavaliando
+    `approval_expires_at` contra o relógio atual — `human_approval` nunca
+    deixa uma decisão humana tardia chegar até aqui depois do prazo (a
+    checagem de expiração vem antes de `interrupt()` retornar), então, se
+    `approval_expires_at` já passou neste ponto, só pode ter sido o
+    próprio sistema quem forçou `REJECTED` por TTL, nunca um humano.
+    """
+    expires_at = state["approval_expires_at"]
+    expired = expires_at is not None and datetime.now(timezone.utc) >= expires_at
+    record_audit(
+        AuditRecord(
+            session_id=state["session_id"],
+            decision="EXPIRED_ARCHIVED" if expired else "REJECTED_ARCHIVED",
+            actor="system" if expired else "human",
+            risk_level=state["risk_level"],
+            confidence=state["confidence"],
+        )
+    )
     return {}
