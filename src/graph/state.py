@@ -9,9 +9,10 @@ para validacao.
 
 from __future__ import annotations
 
+import operator
 import uuid
 from datetime import datetime
-from typing import Literal, TypedDict
+from typing import Annotated, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -131,7 +132,12 @@ class AgentState(TypedDict):
     code_matches: list[CodeMatch]
     impact_patterns: list[PatternChunk]
     change_history: list[HistoryEntry]
-    evidence_sources: list[EvidenceSource]
+    # Annotated com operator.add: os tres nodes de evidencia rodam em
+    # paralelo (fan-out via Send) e cada um pode escrever aqui - sem reducer
+    # de acumulacao, o LangGraph rejeita a escrita concorrente na mesma
+    # chave. code_matches/impact_patterns/change_history nao precisam disso
+    # porque cada um e escrito por exatamente um node.
+    evidence_sources: Annotated[list[EvidenceSource], operator.add]
 
     # analise
     impacts: list[Impact]

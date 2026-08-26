@@ -199,7 +199,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env` não precisa de valores reais para `GITHUB_TOKEN` ainda (essa integração não existe nesta etapa — ver `.env.example` para as variáveis previstas, seção 18 do PRD). Para o LLM, é necessário o Ollama rodando com o modelo configurado em `LLM_MODEL` (padrão `mistral`) baixado:
+`.env` é carregado automaticamente na importação (`src/config.py`) — não precisa exportar as variáveis manualmente no shell. Para a tool `search_code` funcionar (card 08), preencha `GITHUB_TOKEN` com um [personal access token](https://github.com/settings/tokens) com escopo mínimo de leitura de código, e `GITHUB_REPO` com `owner/repo`. Sem essas duas variáveis, `search_codebase` degrada para lista vazia em vez de falhar (ver seção "Executando o grafo" abaixo). Para o LLM, é necessário o Ollama rodando com o modelo configurado em `LLM_MODEL` (padrão `mistral`) baixado:
 
 ```bash
 ollama serve            # em um terminal separado, se ainda não estiver rodando
@@ -216,6 +216,7 @@ A suíte padrão não depende do Ollama estar rodando — o LLM é mockado nos t
 
 ```bash
 RUN_OLLAMA_TESTS=1 python -m pytest tests/integration/test_extract_requirement_ollama.py -v
+RUN_GITHUB_TESTS=1 python -m pytest tests/integration/test_search_code_github.py -v
 ```
 
 ### Executando o grafo diretamente
@@ -233,7 +234,7 @@ resultado = graph.invoke(state)
 print(resultado["requirement"].feature_type, resultado["risk_level"], resultado["confidence"])
 ```
 
-`extract_requirement` já classifica o requisito de verdade via LLM; os nodes de busca de código, RAG e histórico ainda são stub (listas vazias), então a confiança calculada fica abaixo do threshold padrão (70) e o resultado sempre escala para aprovação humana — comportamento esperado até os cards 8, 9 e 13 substituírem esses stubs por integrações reais.
+`extract_requirement` e `search_codebase` já são reais (LLM e API do GitHub); RAG e histórico ainda são stub (listas vazias). Sem um `GITHUB_TOKEN`/`GITHUB_REPO` configurados, ou se o Code Search do GitHub ainda não indexou o arquivo procurado (atraso de indexação é normal em repositórios novos), a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — comportamento esperado até o card 13 (RAG) e o card 9 (histórico) substituírem os stubs restantes.
 
 ### Servidor MCP
 
@@ -241,4 +242,4 @@ print(resultado["requirement"].feature_type, resultado["risk_level"], resultado[
 python -m src.mcp_server.server
 ```
 
-Sobe o servidor MCP via stdio. Ainda sem tools registradas (chegam nos cards 8-10: `search_code`, `fetch_history`, `publish_comment`) — hoje só serve para confirmar o handshake do protocolo.
+Sobe o servidor MCP via stdio. Tool registrada até aqui: `search_code` (card 08). `fetch_history` e `publish_comment` chegam nos cards 9 e 10.

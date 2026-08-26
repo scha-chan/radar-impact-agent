@@ -31,7 +31,8 @@ from src.domain.risk import (
 )
 from src.graph import prompts
 from src.graph.llm import build_chat_model
-from src.graph.state import AgentState, Requirement
+from src.graph.state import AgentState, EvidenceSource, Requirement
+from src.mcp_server.tools.search_code import search_code
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +104,20 @@ STUB_IO_LATENCY_SECONDS = 0.1
 
 
 def search_codebase(state: AgentState) -> dict:
-    """Stub de RF-03.1: GitHub API real chega no card 8."""
-    time.sleep(STUB_IO_LATENCY_SECONDS)
-    return {"code_matches": []}
+    """RF-03.1: busca real via API do GitHub (`search_code`). RF-03.4: cada
+    arquivo encontrado vira uma entrada em `evidence_sources`."""
+    requirement = state["requirement"]
+    search_terms = requirement.search_terms if requirement else []
+    if not search_terms:
+        return {"code_matches": [], "evidence_sources": []}
+
+    matches = search_code(
+        search_terms,
+        repo=os.getenv("GITHUB_REPO", ""),
+        github_token=os.getenv("GITHUB_TOKEN", ""),
+    )
+    evidence = [EvidenceSource(type="code", ref=match.file) for match in matches]
+    return {"code_matches": matches, "evidence_sources": evidence}
 
 
 def retrieve_rag(state: AgentState) -> dict:

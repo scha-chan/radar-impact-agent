@@ -3,3 +3,6 @@ pydantic==2.13.4
 langgraph==1.2.11
 langchain-ollama==1.1.0
 mcp==2.1.1
+httpx==0.28.1
+respx==0.23.1
+python-dotenv==1.2.3
