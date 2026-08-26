@@ -6,3 +6,4 @@ mcp==2.1.1
 httpx==0.28.1
 respx==0.23.1
 python-dotenv==1.2.3
+chromadb==1.5.9
