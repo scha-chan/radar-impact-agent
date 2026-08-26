@@ -234,7 +234,9 @@ resultado = graph.invoke(state)
 print(resultado["requirement"].feature_type, resultado["risk_level"], resultado["confidence"])
 ```
 
-`extract_requirement`, `search_codebase` e `fetch_history` já são reais (LLM e API do GitHub); só o RAG (card 13) ainda é stub. Sem um `GITHUB_TOKEN`/`GITHUB_REPO` configurados, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado (atraso de indexação é normal em repositórios novos), a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — comportamento esperado até o card 13 substituir o último stub.
+`extract_requirement`, `search_codebase`, `fetch_history` e `publish_comment` já são reais; só o RAG (card 13) ainda é stub. Sem um `GITHUB_TOKEN`/`GITHUB_REPO` configurados, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado (atraso de indexação é normal em repositórios novos), a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — comportamento esperado até o card 13 substituir o último stub.
+
+**Cuidado com `DRY_RUN`.** Com `DRY_RUN=false` (padrão) e um requisito que chega com `issue_number` preenchido, `publish_comment` publica um comentário **real** na Issue do GitHub configurada em `GITHUB_REPO` — é uma ação irreversível de verdade, protegida por aprovação humana quando `human_review_required=true` (RF-08.3), mas não simulada. Deixe `DRY_RUN=true` para testar sem publicar nada; nesse modo (ou quando não há `issue_number`), o comentário é gravado em `audit/dry_run/{session_id}.md` em vez de publicado.
 
 ### Servidor MCP
 
@@ -242,4 +244,4 @@ print(resultado["requirement"].feature_type, resultado["risk_level"], resultado[
 python -m src.mcp_server.server
 ```
 
-Sobe o servidor MCP via stdio. Tools registradas até aqui: `search_code` (card 08), `fetch_history` (card 09). `publish_comment` chega no card 10.
+Sobe o servidor MCP via stdio. Tools registradas: `search_code` (card 08), `fetch_history` (card 09). `publish_comment` (card 10) existe em `src/mcp_server/tools/publish_comment.py` mas **não** é exposta como tool MCP — ela precisa do `AgentState` inteiro para validar a autorização (RF-08.2/RF-08.3), algo que um client MCP externo não pode fornecer com segurança; é chamada só pelo node do grafo.
