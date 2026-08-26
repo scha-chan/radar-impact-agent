@@ -25,6 +25,12 @@ O projeto é escrito com comentários e docstrings extensos em português (parte
 
 `gitleaks/gitleaks-action` teve mudanças de licenciamento (passou a exigir licença paga para uso comercial via GitHub App em alguns contextos) — rodar a imagem Docker oficial (`zricethezav/gitleaks:latest`) diretamente com `detect --source . --no-banner` evita qualquer ambiguidade de licenciamento e não depende de uma action de terceiros ficar disponível/atualizada no marketplace.
 
+## Achado real: `ruff` sem versão travada quebrou a CI
+
+A primeira execução real do workflow (após abrir o PR) **falhou** no job `lint`: `pip install ruff` (sem versão) instalou uma versão mais nova do que a `0.15.22` usada localmente, que habilita por padrão regras adicionais (`I001` ordenação de imports, `RUF100` `noqa` não utilizado, `C408`, `SIM115`) que a versão local não sinalizava. `ruff check .` local dizia "All checks passed"; o mesmo comando na CI reprovava com 7 erros — o exato cenário que "funciona na minha máquina" existe para pegar.
+
+Corrigido travando a versão em ambos os lugares: `requirements.txt` (`ruff==0.15.22`) e o passo `pip install ruff==0.15.22` da CI, em vez de tentar corrigir o código para agradar regras de uma versão futura não testada localmente — o objetivo é lint determinístico entre ambientes, não perseguir a régua mais nova disponível.
+
 ## Testes
 
 `pytest -q`: 167 passed, 3 skipped (Ollama real), 99,10% de cobertura — suíte não depende de Docker, Ollama real nem `GITHUB_TOKEN` para passar (os testes que precisam desses recursos já eram condicionados a env vars, `RUN_OLLAMA_TESTS`/`RUN_GITHUB_TESTS`, README seção "Rodando os testes"). `ruff check .` e `ruff format --check .`: sem apontamentos, repositório inteiro.
