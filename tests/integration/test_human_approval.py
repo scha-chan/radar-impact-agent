@@ -104,7 +104,9 @@ def test_expired_approval_archives_even_when_late_decision_is_approved(tmp_path,
     # Simula o relogio passando do prazo sem esperar de verdade: atualiza o
     # checkpoint direto, como uma varredura periodica ou um teste de TTL
     # fariam.
-    graph.update_state(config, {"approval_expires_at": datetime.now(timezone.utc) - timedelta(hours=1)})
+    graph.update_state(
+        config, {"approval_expires_at": datetime.now(timezone.utc) - timedelta(hours=1)}
+    )
 
     result = graph.invoke(Command(resume="APPROVED"), config=config)
 

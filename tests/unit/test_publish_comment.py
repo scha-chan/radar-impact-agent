@@ -54,7 +54,9 @@ def test_publish_comment_writes_file_when_no_issue_number_even_without_dry_run(t
 @respx.mock
 def test_publish_comment_calls_github_api_when_not_dry_run():
     respx.post("https://api.github.com/repos/owner/repo/issues/41/comments").mock(
-        return_value=httpx.Response(201, json={"html_url": "https://github.com/owner/repo/issues/41#comment"})
+        return_value=httpx.Response(
+            201, json={"html_url": "https://github.com/owner/repo/issues/41#comment"}
+        )
     )
     state = _approved_state()
 

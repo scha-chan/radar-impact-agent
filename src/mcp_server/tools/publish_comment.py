@@ -74,7 +74,10 @@ def publish_comment(
         return _write_dry_run_file(state, body, dry_run_dir)
 
     return _publish_via_github_api(
-        body, repo=repo, issue_number=issue_number, github_token=github_token,
+        body,
+        repo=repo,
+        issue_number=issue_number,
+        github_token=github_token,
         timeout_seconds=timeout_seconds,
     )
 
@@ -113,7 +116,9 @@ def _publish_via_github_api(
         )
         response.raise_for_status()
     except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.TransportError) as exc:
-        logger.error("publish_comment_failed", extra={"issue_number": issue_number, "error": str(exc)})
+        logger.error(
+            "publish_comment_failed", extra={"issue_number": issue_number, "error": str(exc)}
+        )
         return None
 
     return response.json().get("html_url")

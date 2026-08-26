@@ -65,9 +65,7 @@ def test_search_code_retries_then_succeeds(monkeypatch):
 def test_search_code_falls_back_to_empty_after_exhausting_retries(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda *_: None)
 
-    route = respx.get("https://api.github.com/search/code").mock(
-        return_value=httpx.Response(500)
-    )
+    route = respx.get("https://api.github.com/search/code").mock(return_value=httpx.Response(500))
 
     matches = search_code(["risk"], repo="owner/repo", github_token="tok", max_retries=2)
 
@@ -80,11 +78,7 @@ def test_search_code_respects_max_results():
     respx.get("https://api.github.com/search/code").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "items": [
-                    {"path": f"file_{i}.py", "text_matches": []} for i in range(20)
-                ]
-            },
+            json={"items": [{"path": f"file_{i}.py", "text_matches": []} for i in range(20)]},
         )
     )
 

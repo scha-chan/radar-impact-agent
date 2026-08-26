@@ -1,5 +1,7 @@
 # RADAR — Agente de Análise de Impacto e Risco de Requisitos
 
+[![CI](https://github.com/scha-chan/radar-impact-agent/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/scha-chan/radar-impact-agent/actions/workflows/ci.yml)
+
 > Projeto avaliativo M2.2 — IA para Desenvolvedores [T1]. Em desenvolvimento.
 
 Especificação completa: [docs/PRD-RADAR-Agente-Impacto-Risco.md](docs/PRD-RADAR-Agente-Impacto-Risco.md)

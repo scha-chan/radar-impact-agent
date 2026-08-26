@@ -44,7 +44,9 @@ class ToolExecutor:
                 "tool_call_refused_unregistered",
                 extra={"tool": tool_name, "session_id": state["session_id"]},
             )
-            raise PermissionDeniedError(f"{tool_name}: nenhuma permissão declarada — chamada recusada")
+            raise PermissionDeniedError(
+                f"{tool_name}: nenhuma permissão declarada — chamada recusada"
+            )
 
         authorize(permission, state)
         logger.info(

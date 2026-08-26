@@ -75,7 +75,9 @@ _PATTERN_RULES: list[tuple[re.Pattern[str], str]] = [
         "tenta redefinir regra de autorização/acesso",
     ),
     (
-        re.compile(r"you\s+are\s+now\s+a?n?\s*[\w\s]*(no\s+restrictions|unrestricted)", re.IGNORECASE),
+        re.compile(
+            r"you\s+are\s+now\s+a?n?\s*[\w\s]*(no\s+restrictions|unrestricted)", re.IGNORECASE
+        ),
         "tenta redefinir o papel/restrições do agente",
     ),
 ]

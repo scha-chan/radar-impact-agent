@@ -41,9 +41,7 @@ def test_classify_risk_matrix(severity, probability, expected):
 
 def test_classify_risk_is_deterministic():
     # RF-05.3: mesma entrada -> mesma saida, sempre.
-    results = {
-        classify_risk(Severity.HIGH, Probability.LIKELY) for _ in range(50)
-    }
+    results = {classify_risk(Severity.HIGH, Probability.LIKELY) for _ in range(50)}
     assert results == {RiskLevel.HIGH}
 
 
@@ -124,10 +122,7 @@ def test_confidence_deducts_5_per_risk_without_mitigation():
 
 
 def test_confidence_caps_mitigation_deduction_at_15():
-    risks = [
-        RiskItem(f"r{i}", Severity.LOW, Probability.RARE, mitigation=None)
-        for i in range(4)
-    ]
+    risks = [RiskItem(f"r{i}", Severity.LOW, Probability.RARE, mitigation=None) for i in range(4)]
     inputs = _full_confidence_inputs(risks=risks)
     # 4 riscos sem mitigacao -> 4*5=20, mas o teto e -15.
     assert calculate_confidence(inputs) == 85

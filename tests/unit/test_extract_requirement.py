@@ -26,9 +26,7 @@ def test_extract_requirement_returns_llm_result_on_first_try(monkeypatch):
 
 def test_extract_requirement_retries_once_then_succeeds(monkeypatch):
     expected = Requirement(text="x", feature_type="login", search_terms=["login"])
-    chat_model = _fake_structured_llm(
-        invoke_side_effect=[ValueError("json invalido"), expected]
-    )
+    chat_model = _fake_structured_llm(invoke_side_effect=[ValueError("json invalido"), expected])
     monkeypatch.setattr(nodes, "build_chat_model", lambda **_: chat_model)
 
     state = create_initial_state("Adicionar 2FA no login", max_retries=2)
@@ -39,9 +37,7 @@ def test_extract_requirement_retries_once_then_succeeds(monkeypatch):
 
 
 def test_extract_requirement_falls_back_after_exhausting_retries(monkeypatch):
-    chat_model = _fake_structured_llm(
-        invoke_side_effect=ValueError("sempre falha")
-    )
+    chat_model = _fake_structured_llm(invoke_side_effect=ValueError("sempre falha"))
     monkeypatch.setattr(nodes, "build_chat_model", lambda **_: chat_model)
 
     state = create_initial_state("texto qualquer", max_retries=2)
