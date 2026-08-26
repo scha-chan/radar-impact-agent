@@ -255,6 +255,14 @@ Toda execução emite dois sinais correlacionados pelo mesmo `session_id` (seç�
 
 Uma execução real reconstruída — linha do tempo dos nove nodes com latência de cada um, a decisão de autonomia tomada e a evidência que a sustentou, com os dois sinais correlacionados por `session_id` — está documentada em [`docs/evidencias/card-21-investigacao-execucao-real.md`](docs/evidencias/card-21-investigacao-execucao-real.md).
 
+### Interface mínima (API + página)
+
+```bash
+uvicorn src.api.app:app --reload
+```
+
+Abra `http://localhost:8000` — página única (card 30, RF-10) para submeter um requisito, ver o painel de aprovações pendentes e inspecionar a trilha de auditoria de uma sessão. Endpoints: `POST /analyze` (RF-01.2), `GET /approvals`/`POST /approvals/{session_id}` (RF-07.2), `GET /audit/{session_id}` (RF-09.4). Documentação interativa automática do FastAPI em `/docs`.
+
 ### Servidor MCP
 
 ```bash

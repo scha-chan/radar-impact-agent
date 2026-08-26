@@ -1,6 +1,11 @@
 import json
 
-from src.observability.audit import AuditRecord, read_audit_trail, record_audit
+from src.observability.audit import (
+    AuditRecord,
+    list_pending_sessions,
+    read_audit_trail,
+    record_audit,
+)
 
 
 def test_record_audit_appends_a_json_line(tmp_path):
@@ -102,3 +107,26 @@ def test_read_audit_trail_skips_blank_lines(tmp_path):
     entries = read_audit_trail("s1", path=str(path))
 
     assert [e["decision"] for e in entries] == ["ESCALATED", "AUTO_PUBLISHED"]
+
+
+def test_list_pending_sessions_returns_sessions_whose_last_decision_is_escalated(tmp_path):
+    path = tmp_path / "trail.jsonl"
+    # s1: escalou e ainda nao foi resolvida.
+    record_audit(AuditRecord(session_id="s1", decision="ESCALATED", actor="system"), path=str(path))
+    # s2: escalou e depois foi aprovada - nao deve aparecer como pendente.
+    record_audit(AuditRecord(session_id="s2", decision="ESCALATED", actor="system"), path=str(path))
+    record_audit(
+        AuditRecord(session_id="s2", decision="APPROVED_PUBLISHED", actor="human"), path=str(path)
+    )
+    # s3: nunca escalou (publicou direto) - nao deve aparecer.
+    record_audit(
+        AuditRecord(session_id="s3", decision="AUTO_PUBLISHED", actor="system"), path=str(path)
+    )
+
+    pending = list_pending_sessions(path=str(path))
+
+    assert [entry["session_id"] for entry in pending] == ["s1"]
+
+
+def test_list_pending_sessions_returns_empty_list_when_file_does_not_exist(tmp_path):
+    assert list_pending_sessions(path=str(tmp_path / "does-not-exist.jsonl")) == []

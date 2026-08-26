@@ -11,3 +11,5 @@ python-dotenv==1.2.3
 chromadb==1.5.9
 langgraph-checkpoint-sqlite==3.1.1
 structlog==26.1.0
+fastapi==0.139.2
+uvicorn==0.51.0
