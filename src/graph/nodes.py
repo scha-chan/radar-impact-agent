@@ -17,6 +17,7 @@ human_approval (interrupt + checkpointer, card 15), publish_comment
 from __future__ import annotations
 
 import os
+import time
 
 from src.domain.risk import (
     ConfidenceInputs,
@@ -62,18 +63,28 @@ def block(state: AgentState) -> dict:
     return {}
 
 
+# Latencia de I/O simulada nos tres nodes de evidencia — existe so para o
+# fan-out via Send (card 05) ser mensuravel antes das integracoes reais
+# (cards 8, 9, 13) terem latencia de rede propria para medir. Remover junto
+# com o ultimo stub que a usa.
+STUB_IO_LATENCY_SECONDS = 0.1
+
+
 def search_codebase(state: AgentState) -> dict:
     """Stub de RF-03.1: GitHub API real chega no card 8."""
+    time.sleep(STUB_IO_LATENCY_SECONDS)
     return {"code_matches": []}
 
 
 def retrieve_rag(state: AgentState) -> dict:
     """Stub de RF-03.2: ChromaDB real chega no card 13."""
+    time.sleep(STUB_IO_LATENCY_SECONDS)
     return {"impact_patterns": []}
 
 
 def fetch_history(state: AgentState) -> dict:
     """Stub de RF-03.3: GitHub API real chega no card 9."""
+    time.sleep(STUB_IO_LATENCY_SECONDS)
     return {"change_history": []}
 
 
