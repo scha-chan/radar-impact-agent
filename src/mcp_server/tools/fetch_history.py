@@ -32,7 +32,11 @@ def fetch_history(
     max_retries: int = 2,
     max_terms: int = 3,
     max_results: int = 10,
+    failures: list[str] | None = None,
 ) -> list[HistoryEntry]:
+    """`failures`, se informado, recebe um item por termo/endpoint cuja
+    busca esgotou as tentativas (card 11 — sinal de fallback para
+    score_risk)."""
     if not repo or not github_token:
         return []
 
@@ -48,8 +52,8 @@ def fetch_history(
     with httpx.Client(base_url=GITHUB_API_BASE, headers=headers, timeout=timeout_seconds) as client:
         for term in search_terms[:max_terms]:
             for entry in [
-                *_search_commits(client, term, repo, max_retries),
-                *_search_prs(client, term, repo, max_retries),
+                *_search_commits(client, term, repo, max_retries, failures),
+                *_search_prs(client, term, repo, max_retries, failures),
             ]:
                 if entry.ref in seen_refs:
                     continue
@@ -61,13 +65,18 @@ def fetch_history(
     return entries
 
 
-def _search_commits(client: httpx.Client, term: str, repo: str, max_retries: int) -> list[HistoryEntry]:
+def _search_commits(
+    client: httpx.Client, term: str, repo: str, max_retries: int, failures: list[str] | None
+) -> list[HistoryEntry]:
     data = get_with_retry(
         client,
         "/search/commits",
         {"q": f"{term} repo:{repo}", "per_page": 5},
         max_retries=max_retries,
         log_context={"tool": "fetch_history", "kind": "commit", "term": term},
+        on_exhausted=(lambda t=term: failures.append(f"fetch_history:commit:{t}"))
+        if failures is not None
+        else None,
     )
     entries = []
     for item in (data or {}).get("items", []):
@@ -80,13 +89,18 @@ def _search_commits(client: httpx.Client, term: str, repo: str, max_retries: int
     return entries
 
 
-def _search_prs(client: httpx.Client, term: str, repo: str, max_retries: int) -> list[HistoryEntry]:
+def _search_prs(
+    client: httpx.Client, term: str, repo: str, max_retries: int, failures: list[str] | None
+) -> list[HistoryEntry]:
     data = get_with_retry(
         client,
         "/search/issues",
         {"q": f"{term} repo:{repo} type:pr", "per_page": 5},
         max_retries=max_retries,
         log_context={"tool": "fetch_history", "kind": "pr", "term": term},
+        on_exhausted=(lambda t=term: failures.append(f"fetch_history:pr:{t}"))
+        if failures is not None
+        else None,
     )
     entries = []
     for item in (data or {}).get("items", []):

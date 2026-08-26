@@ -92,3 +92,18 @@ def test_fetch_history_respects_max_results():
     entries = fetch_history(["a", "b", "c"], repo="owner/repo", github_token="tok", max_results=3)
 
     assert len(entries) == 3
+
+
+@respx.mock
+def test_fetch_history_records_failure_when_both_endpoints_exhaust_retries(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    respx.get("https://api.github.com/search/commits").mock(return_value=httpx.Response(403))
+    respx.get("https://api.github.com/search/issues").mock(return_value=httpx.Response(403))
+
+    failures: list[str] = []
+    entries = fetch_history(
+        ["risk"], repo="owner/repo", github_token="tok", max_retries=2, failures=failures
+    )
+
+    assert entries == []
+    assert failures == ["fetch_history:commit:risk", "fetch_history:pr:risk"]

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 
 import httpx
 
@@ -20,10 +21,16 @@ def get_with_retry(
     *,
     max_retries: int,
     log_context: dict,
+    on_exhausted: Callable[[], None] | None = None,
 ) -> dict | None:
     """Retorna o JSON decodificado, ou `None` se todas as tentativas
     falharem — fallback silencioso (RF-03.5); quem chama decide o que
-    fazer com `None` (normalmente: pular esse item, não abortar a tool)."""
+    fazer com `None` (normalmente: pular esse item, não abortar a tool).
+
+    `on_exhausted`, se informado, é chamado quando as tentativas se esgotam
+    — usado pelo card 11 para sinalizar ao node do grafo que uma tool caiu
+    em fallback (afeta o cálculo de confiança, seção 11 do PRD).
+    """
     attempts = max_retries + 1
     backoff = 0.5
 
@@ -42,4 +49,6 @@ def get_with_retry(
                 backoff *= 2
 
     logger.error("github_api_call_exhausted_retries", extra=log_context)
+    if on_exhausted is not None:
+        on_exhausted()
     return None
