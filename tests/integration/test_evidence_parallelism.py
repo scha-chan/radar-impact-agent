@@ -6,10 +6,11 @@ existirem.
 """
 
 import time
+from unittest.mock import MagicMock
 
 from src.graph import nodes
 from src.graph.build import build_graph
-from src.graph.state import create_initial_state
+from src.graph.state import Requirement, create_initial_state
 
 
 def _run_evidence_nodes_sequentially(state) -> float:
@@ -20,7 +21,14 @@ def _run_evidence_nodes_sequentially(state) -> float:
     return time.perf_counter() - start
 
 
-def test_send_fan_out_runs_evidence_nodes_concurrently():
+def test_send_fan_out_runs_evidence_nodes_concurrently(monkeypatch):
+    # extract_requirement chama um LLM real; mockado aqui para o benchmark
+    # medir só o fan-out via Send, não latência de rede do Ollama.
+    fake_requirement = Requirement(text="x", feature_type="outro", search_terms=[])
+    chat_model = MagicMock()
+    chat_model.with_structured_output.return_value.invoke.return_value = fake_requirement
+    monkeypatch.setattr(nodes, "build_chat_model", lambda **_: chat_model)
+
     state = create_initial_state("Adicionar filtro por data na listagem")
 
     sequential_seconds = _run_evidence_nodes_sequentially(state)

@@ -174,12 +174,13 @@ Detalhes completos de escopo, requisitos funcionais e cenários: seções 5, 9 e
 
 ## Instalação e execução
 
-> Esta seção acompanha o desenvolvimento — reflete só o que já está implementado. Hoje isso é o grafo (com nodes stub) e a suíte de testes; API, servidor MCP e `docker compose up` chegam nos próximos cards e serão adicionados aqui quando existirem (RNF-06).
+> Esta seção acompanha o desenvolvimento — reflete só o que já está implementado. Hoje isso é o grafo (com `extract_requirement` já usando LLM real, os demais nodes ainda stub) e a suíte de testes; API, servidor MCP e `docker compose up` chegam nos próximos cards e serão adicionados aqui quando existirem (RNF-06).
 
 ### Pré-requisitos
 
 - Python 3.11+ (desenvolvido e testado com 3.14)
 - Git
+- [Ollama](https://ollama.com) — LLM local, sem custo de API e sem chave (seção 18 do PRD)
 
 ### Configuração
 
@@ -198,7 +199,12 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env` não precisa de valores reais ainda — nenhuma integração externa (LLM, GitHub) está implementada nesta etapa. Ver `.env.example` para as variáveis já previstas (seção 18 do PRD).
+`.env` não precisa de valores reais para `GITHUB_TOKEN` ainda (essa integração não existe nesta etapa — ver `.env.example` para as variáveis previstas, seção 18 do PRD). Para o LLM, é necessário o Ollama rodando com o modelo configurado em `LLM_MODEL` (padrão `mistral`) baixado:
+
+```bash
+ollama serve            # em um terminal separado, se ainda não estiver rodando
+ollama pull mistral      # uma vez, baixa o modelo (~4.4 GB)
+```
 
 ### Rodando os testes
 
@@ -206,9 +212,15 @@ cp .env.example .env
 python -m pytest tests/ -v
 ```
 
-### Executando o grafo (stub) diretamente
+A suíte padrão não depende do Ollama estar rodando — o LLM é mockado nos testes de `extract_requirement` e do grafo. Para rodar também o smoke test contra o Ollama real:
 
-Sem API ainda, o jeito de ver o grafo rodando é invocá-lo direto em Python:
+```bash
+RUN_OLLAMA_TESTS=1 python -m pytest tests/integration/test_extract_requirement_ollama.py -v
+```
+
+### Executando o grafo diretamente
+
+Sem API ainda, o jeito de ver o grafo rodando é invocá-lo direto em Python (requer Ollama no ar, ver acima):
 
 ```python
 from src.graph.build import build_graph
@@ -218,7 +230,7 @@ graph = build_graph()
 state = create_initial_state("Adicionar filtro por data na listagem de pedidos")
 resultado = graph.invoke(state)
 
-print(resultado["risk_level"], resultado["confidence"], resultado["human_review_required"])
+print(resultado["requirement"].feature_type, resultado["risk_level"], resultado["confidence"])
 ```
 
-Com os nodes de evidência ainda stub (listas vazias), a confiança calculada fica abaixo do threshold padrão (70) e o resultado sempre escala para aprovação humana — comportamento esperado até os cards 8, 9 e 13 (busca de código, histórico e RAG) substituírem os stubs por integrações reais.
+`extract_requirement` já classifica o requisito de verdade via LLM; os nodes de busca de código, RAG e histórico ainda são stub (listas vazias), então a confiança calculada fica abaixo do threshold padrão (70) e o resultado sempre escala para aprovação humana — comportamento esperado até os cards 8, 9 e 13 substituírem esses stubs por integrações reais.

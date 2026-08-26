@@ -821,9 +821,9 @@ Cada arquivo documenta objetivo, regras de comportamento, restrições e formato
 ### Configuração por ambiente
 
 ```bash
-LLM_PROVIDER=anthropic
-LLM_MODEL=claude-sonnet-4-6
-LLM_API_KEY=
+LLM_PROVIDER=ollama
+LLM_MODEL=mistral
+OLLAMA_BASE_URL=http://localhost:11434
 GITHUB_TOKEN=
 GITHUB_REPO=usuario/radar-impact-agent
 CONFIDENCE_THRESHOLD=70
@@ -832,6 +832,8 @@ TOOL_TIMEOUT_SECONDS=10
 MAX_RETRIES=2
 DRY_RUN=false
 ```
+
+**LLM local (Ollama).** Sem custo de API, sem chave, roda inteiramente na máquina do avaliador — `docs/PRD` e README documentam como subir o serviço (`ollama serve`) e o modelo esperado. `src/graph/llm.py` isola a fábrica do cliente atrás de `build_chat_model()`; trocar de provedor no futuro (`LLM_PROVIDER`) não exige tocar nos nodes que o consomem. Modelos testados localmente: `mistral` (mais rápido, usado como padrão) e `gemma4:12b` (mais lento, qualidade maior) — qualquer modelo com suporte a saída estruturada (`format=schema`) do Ollama serve.
 
 ### Ciclo de refinamento a documentar
 

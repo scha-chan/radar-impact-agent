@@ -16,6 +16,7 @@ human_approval (interrupt + checkpointer, card 15), publish_comment
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 
@@ -28,7 +29,11 @@ from src.domain.risk import (
     aggregate_risk_level,
     calculate_confidence,
 )
+from src.graph import prompts
+from src.graph.llm import build_chat_model
 from src.graph.state import AgentState, Requirement
+
+logger = logging.getLogger(__name__)
 
 CONFIDENCE_THRESHOLD = int(os.getenv("CONFIDENCE_THRESHOLD", "70"))
 
@@ -47,11 +52,38 @@ def _to_risk_item(risk) -> RiskItem:
 
 
 def extract_requirement(state: AgentState) -> dict:
-    """Stub de RF-02: heurística simples, sem LLM."""
-    text = state["raw_requirement"]
-    words = text.split()
-    requirement = Requirement(text=text, feature_type="outro", search_terms=words[:5])
-    return {"requirement": requirement}
+    """RF-02: LLM converte texto livre em `Requirement` validado por Pydantic.
+
+    Retry limitado por `retries_left` (RF-02.4); se todas as tentativas
+    falharem (parse inválido ou erro de chamada), cai para um `Requirement`
+    de fallback (feature_type="outro", sem search_terms) — o grafo continua,
+    e a confiança calculada em `score_risk` penaliza o resultado degradado.
+    """
+    raw_requirement = state["raw_requirement"]
+    structured_llm = build_chat_model().with_structured_output(Requirement)
+    prompt = prompts.build_extract_requirement_prompt(raw_requirement)
+
+    retries_left = state["retries_left"]
+    attempts = max(1, retries_left + 1)
+
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            requirement = structured_llm.invoke(prompt)
+            return {"requirement": requirement, "retries_left": retries_left - attempt}
+        except Exception as exc:  # noqa: BLE001 - parse e erro de chamada tratados igual (RF-02.4)
+            last_error = exc
+            logger.warning(
+                "extract_requirement_parse_failed",
+                extra={"attempt": attempt, "error": str(exc)},
+            )
+
+    logger.error(
+        "extract_requirement_exhausted_retries",
+        extra={"attempts": attempts, "error": str(last_error)},
+    )
+    fallback = Requirement(text=raw_requirement, feature_type="outro", search_terms=[])
+    return {"requirement": fallback, "retries_left": 0}
 
 
 def guard_adversarial(state: AgentState) -> dict:
