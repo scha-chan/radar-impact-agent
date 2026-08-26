@@ -20,6 +20,12 @@ from src import config  # noqa: F401 - carrega .env como efeito colateral do imp
 from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
 from src.mcp_server.tools.search_code import search_code as _search_code
 
+# publish_comment não é exposta como tool MCP genérica: ela opera sobre o
+# AgentState inteiro (para a checagem de autorização RF-08.2/RF-08.3), não
+# sobre um payload solto que um client MCP externo poderia montar sem as
+# garantias de aprovação humana. É chamada só pelo node do grafo
+# (graph/nodes.py::publish_comment), nunca via protocolo MCP.
+
 SERVER_NAME = "radar-mcp-server"
 SERVER_VERSION = "0.1.0"
 

@@ -31,8 +31,10 @@ from src.domain.risk import (
 )
 from src.graph import prompts
 from src.graph.llm import build_chat_model
+from src.governance.permissions import PermissionDeniedError
 from src.graph.state import AgentState, EvidenceSource, Requirement
 from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
+from src.mcp_server.tools.publish_comment import publish_comment as _publish_comment
 from src.mcp_server.tools.search_code import search_code
 
 logger = logging.getLogger(__name__)
@@ -197,8 +199,21 @@ def route_after_approval(state: AgentState) -> str:
 
 
 def publish_comment(state: AgentState) -> dict:
-    """Stub de RF-08: chamada real ao GitHub chega no card 10."""
-    return {"published_comment_url": f"stub://issue/{state['issue_number']}/comment"}
+    """RF-08: publica o parecer (ou grava em arquivo se DRY_RUN/sem Issue).
+    Protegido por RF-08.2/RF-08.3 — ver `governance.permissions.authorize`.
+    """
+    dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+    try:
+        url = _publish_comment(
+            state,
+            repo=os.getenv("GITHUB_REPO", ""),
+            github_token=os.getenv("GITHUB_TOKEN", ""),
+            dry_run=dry_run,
+        )
+    except PermissionDeniedError as exc:
+        logger.error("publish_comment_denied", extra={"error": str(exc)})
+        return {"published_comment_url": None}
+    return {"published_comment_url": url}
 
 
 def archive(state: AgentState) -> dict:

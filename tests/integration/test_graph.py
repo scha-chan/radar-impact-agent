@@ -56,9 +56,12 @@ def test_graph_runs_end_to_end_and_escalates_when_evidence_is_empty():
     assert result["published_comment_url"] is None
 
 
-def test_graph_publishes_when_approval_decision_is_already_approved():
+def test_graph_publishes_when_approval_decision_is_already_approved(tmp_path, monkeypatch):
     # Simula o que o card 15 (interrupt real) vai produzir: o grafo retomado
-    # com approval_decision ja preenchido.
+    # com approval_decision ja preenchido. Sem issue_number, publish_comment
+    # (card 10) grava em arquivo em vez de chamar a API do GitHub - roda
+    # dentro de tmp_path para nao sujar o repo com audit/dry_run/ real.
+    monkeypatch.chdir(tmp_path)
     graph = build_graph()
     state = create_initial_state("Adicionar filtro por data na listagem")
     state["approval_decision"] = "APPROVED"
@@ -66,7 +69,7 @@ def test_graph_publishes_when_approval_decision_is_already_approved():
     result = graph.invoke(state)
 
     assert result["human_review_required"] is True
-    assert result["published_comment_url"] == f"stub://issue/{result['issue_number']}/comment"
+    assert result["published_comment_url"].startswith("file://")
 
 
 def test_graph_archives_when_rejected():
