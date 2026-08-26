@@ -2,13 +2,25 @@
 
 [![CI](https://github.com/scha-chan/radar-impact-agent/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/scha-chan/radar-impact-agent/actions/workflows/ci.yml)
 
-> Projeto avaliativo M2.2 — IA para Desenvolvedores [T1]. Em desenvolvimento.
+> Projeto avaliativo M2.2 — IA para Desenvolvedores [T1].
 
-Especificação completa: [docs/PRD-RADAR-Agente-Impacto-Risco.md](docs/PRD-RADAR-Agente-Impacto-Risco.md)
+Especificação completa: [docs/PRD-RADAR-Agente-Impacto-Risco.md](docs/PRD-RADAR-Agente-Impacto-Risco.md) — este README resume o que está implementado e como reproduzir; o PRD é a referência normativa (requisitos, matriz de risco, cenários, contratos).
 
-Este README será expandido com instalação, execução, cenários de uso e evidências
-conforme o desenvolvimento avança (ver seção 5.2 do PRD). As seções abaixo cobrem
-descrição da solução e classificação/arquitetura.
+Quadro Kanban do projeto: [github.com/users/scha-chan/projects/1](https://github.com/users/scha-chan/projects/1). Evidência por card (o que foi feito, decisões, testes): [`docs/evidencias/`](docs/evidencias/).
+
+## Sumário
+
+1. [Descrição da solução](#descrição-da-solução)
+2. [Classificação e arquitetura](#classificação-e-arquitetura)
+3. [Cenários de uso](#cenários-de-uso)
+4. [Segurança e limites de autonomia](#segurança-e-limites-de-autonomia)
+5. [Estrutura do repositório](#estrutura-do-repositório)
+6. [Instalação e execução](#instalação-e-execução)
+7. [QA e qualidade](#qa-e-qualidade)
+8. [DevOps: pipeline, logs e anomalias](#devops-pipeline-logs-e-anomalias)
+9. [Prompts e refinamento](#prompts-e-refinamento)
+10. [Vídeo de demonstração](#vídeo-de-demonstração)
+11. [Limitações conhecidas e evolução futura](#limitações-conhecidas-e-evolução-futura)
 
 ---
 
@@ -20,10 +32,10 @@ durante a implementação — ou em produção — porque a análise depende de 
 estava na reunião e de quanto contexto essa pessoa tem de memória.
 
 **Solução.** RADAR é um agente que recebe um requisito de mudança (uma Issue do
-GitHub), coleta evidência real do código e do histórico do repositório, cruza
-essa evidência com uma base de padrões de impacto conhecidos, e produz um
-parecer estruturado de risco. Pareceres de baixa confiança não são publicados
-sem aprovação humana.
+GitHub ou texto livre via API), coleta evidência real do código e do histórico
+do repositório, cruza essa evidência com uma base de padrões de impacto
+conhecidos, e produz um parecer estruturado de risco. Pareceres de baixa
+confiança não são publicados sem aprovação humana.
 
 **Público.** Tech leads (decidem planejamento a partir do parecer), product
 owners (entendem custo de risco de uma feature), QA leads (usam os testes
@@ -37,7 +49,8 @@ julgamento técnico, e sim garantir que ele parta de evidência real e que
 mudanças de alto risco não avancem sem revisão explícita.
 
 **Saída principal.** Objeto `ImpactAnalysis` validado por Pydantic, publicado
-como comentário markdown na Issue de origem.
+como comentário markdown na Issue de origem (ou gravado em arquivo em modo
+`DRY_RUN`).
 
 ### Continuidade do mini-projeto
 
@@ -151,21 +164,26 @@ sozinho ou se uma ação irreversível é autorizada.
 | Paralelização | as três coletas de evidência, via `Send` API do LangGraph |
 | Condição de parada | `retries_left` decrementado a cada falha de tool; `approval_expires_at` no aguardo de aprovação |
 
+Todos os nodes são instrumentados uniformemente com logs estruturados
+(`src/observability/logging.py`, card 19) e decisões de autonomia são
+registradas na trilha de auditoria (`src/observability/audit.py`, card 20) —
+ver [Observabilidade](#observabilidade-os-dois-sinais-e-uma-investigação-real) abaixo.
+
 ### Stack
 
 | Camada | Tecnologia |
 |---|---|
 | Orquestração | LangGraph |
-| API | FastAPI |
+| API | FastAPI + uvicorn |
 | Validação | Pydantic v2 |
 | Tools | Servidor MCP próprio (Python SDK) |
 | Vetorial | ChromaDB (local, persistente) |
 | Persistência de estado | SqliteSaver (checkpointer LangGraph) |
 | Logs | structlog (JSON) |
-| Trace | OpenTelemetry (exporter console/arquivo) |
-| Testes | pytest, pytest-asyncio, respx |
-| Lint | ruff |
-| CI | GitHub Actions |
+| Testes | pytest, pytest-cov, respx, `TestClient` (FastAPI) |
+| Lint | ruff (`check` + `format --check`) |
+| CI | GitHub Actions (lint, testes, build Docker, scan de segredos) |
+| Container | Docker + docker-compose |
 | Low-code | n8n (Docker local) |
 | Modelo | configurável por variável de ambiente (`LLM_MODEL`, `LLM_PROVIDER`) |
 
@@ -174,15 +192,82 @@ Detalhes completos de escopo, requisitos funcionais e cenários: seções 5, 9 e
 
 ---
 
-## Instalação e execução
+## Cenários de uso
 
-> Esta seção acompanha o desenvolvimento — reflete só o que já está implementado. Hoje isso é o grafo (com `extract_requirement` já usando LLM real, os demais nodes ainda stub) e a suíte de testes; API, servidor MCP e `docker compose up` chegam nos próximos cards e serão adicionados aqui quando existirem (RNF-06).
+Os quatro cenários da seção 12 do PRD, cada um com teste de integração dedicado que reproduz o comportamento real do grafo:
+
+| # | Cenário | Comportamento esperado | Teste |
+|---|---|---|---|
+| 1 | Fluxo principal (feliz) | Evidência forte em código/RAG/histórico → confiança alta, publicação automática | [`tests/integration/test_scenario_1_happy_path.py`](tests/integration/test_scenario_1_happy_path.py) |
+| 2 | Risco alto com escalação | Risco `HIGH`, confiança abaixo do threshold → pausa (`interrupt`), aprovação retoma e publica | [`tests/integration/test_scenario_2_high_risk_escalation.py`](tests/integration/test_scenario_2_high_risk_escalation.py) |
+| 3 | Entrada adversarial (obrigatório) | Instrução embutida no requisito ("ignore as regras...") → bloqueado, nenhuma tool de escrita chamada | [`tests/integration/test_scenario_3_adversarial.py`](tests/integration/test_scenario_3_adversarial.py) |
+| 4 | Falha de integração (resiliência) | API do GitHub falha (403) → retry, fallback, confiança penalizada, escalação | [`tests/integration/test_scenario_4_resilience.py`](tests/integration/test_scenario_4_resilience.py) |
+
+Uma execução real (não simulada em teste) reconstruída ponta a ponta, com a evidência que sustentou a decisão de autonomia, está em [`docs/evidencias/card-21-investigacao-execucao-real.md`](docs/evidencias/card-21-investigacao-execucao-real.md).
+
+---
+
+## Segurança e limites de autonomia
+
+Três camadas de defesa contra conteúdo externo não confiável (seção 13 do PRD), aplicadas a todo texto vindo de fora — a Issue, trechos de código, mensagens de commit:
+
+1. **Delimitação estrutural** — conteúdo externo entra no prompt dentro de um bloco delimitado, com instrução de sistema afirmando que é dado a ser analisado, nunca comando a ser obedecido.
+2. **Detecção** (card 18) — padrões conhecidos (determinístico, [`src/governance/adversarial.py`](src/governance/adversarial.py)) combinados com uma checagem por LLM quando os padrões não encontram nada.
+3. **Contenção arquitetural** — mesmo que as duas primeiras falhem, o LLM nunca decide `risk_level` nem o threshold de escalação (`src/domain/risk.py`, card 02); é essa camada que sustenta a garantia de verdade.
+
+**Permissões de tool** (cards 10/17, [`src/governance/tool_executor.py`](src/governance/tool_executor.py)) — toda tool com efeito externo (`search_code`, `fetch_history`, `publish_comment`) precisa de uma `ToolPermission` registrada; sem ela, a chamada é recusada. `publish_comment` (a única ação irreversível) exige `approval_decision == "APPROVED"` quando `human_review_required` é verdadeiro.
+
+**Escalação humana com expiração** (cards 15/16) — pareceres de baixa confiança pausam via `interrupt()` do LangGraph, preservados no checkpointer; uma aprovação que chega depois do prazo (`APPROVAL_TTL_HOURS`, padrão 24h) é descartada e o grafo arquiva sem publicar.
+
+**`DRY_RUN`** — com `DRY_RUN=false` (padrão) e um requisito com `issue_number`, `publish_comment` publica de verdade na Issue configurada em `GITHUB_REPO`. Deixe `DRY_RUN=true` para testar sem publicar nada; o comentário é gravado em `audit/dry_run/{session_id}.md`.
+
+Nenhum segredo é versionado — `.env` está no `.gitignore`, `.env.example` só tem chaves vazias, e o pipeline de CI roda um scan de segredos (`gitleaks`) em todo push/PR (card 25).
+
+---
+
+## Estrutura do repositório
+
+```
+radar-impact-agent/
+├── .github/workflows/ci.yml   # lint, testes, build Docker, scan de segredos (card 25)
+├── src/
+│   ├── api/                   # FastAPI + página única (card 30)
+│   ├── graph/                 # nodes, edges, state, build, prompts, LLM
+│   ├── mcp_server/            # servidor MCP e tools do GitHub
+│   ├── domain/                # matriz de risco, fórmula de confiança (Python puro)
+│   ├── governance/            # permissões, detector adversarial
+│   ├── rag/                   # ingestão, chunking, retriever (ChromaDB)
+│   ├── observability/         # logs estruturados, trilha de auditoria
+│   └── devops/                # dataset simulado, baseline, tendência (cards 27/28)
+├── knowledge/                 # corpus de padrões de impacto (fonte do RAG, 54 chunks)
+├── tests/
+│   ├── unit/                  # lógica pura, isolada
+│   ├── integration/           # grafo completo, GitHub mockado, os 4 cenários
+│   └── e2e/                   # aceitação via TestClient do FastAPI (card 30)
+├── docs/
+│   ├── evidencias/            # um arquivo por card: o que foi feito, decisões, testes
+│   ├── prompts/                # prompts documentados + refinamento
+│   ├── qa/                    # code review com IA, exemplos de teste
+│   ├── devops/                # análise de logs, dataset, anomalia, tendência
+│   └── lowcode/                # workflow n8n exportado
+├── .env.example
+├── docker-compose.yml
+├── Dockerfile
+└── README.md
+```
+
+**Branches:** `main` (final) ← `develop` (integração) ← `feature/*`/`docs/*` (por card). Histórico completo de PRs mesclados: [pull requests do repositório](https://github.com/scha-chan/radar-impact-agent/pulls?q=is%3Apr+is%3Amerged).
+
+---
+
+## Instalação e execução
 
 ### Pré-requisitos
 
-- Python 3.11+ (desenvolvido e testado com 3.14)
+- Python 3.11+ (desenvolvido e testado com 3.14; CI roda em 3.13)
 - Git
 - [Ollama](https://ollama.com) — LLM local, sem custo de API e sem chave (seção 18 do PRD)
+- Docker + Docker Compose (opcional — para `docker compose up`, n8n e o build de CI)
 
 ### Configuração
 
@@ -201,29 +286,44 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env` é carregado automaticamente na importação (`src/config.py`) — não precisa exportar as variáveis manualmente no shell. Para a tool `search_code` funcionar (card 08), preencha `GITHUB_TOKEN` com um [personal access token](https://github.com/settings/tokens) com escopo mínimo de leitura de código, e `GITHUB_REPO` com `owner/repo`. Sem essas duas variáveis, `search_codebase` degrada para lista vazia em vez de falhar (ver seção "Executando o grafo" abaixo). Para o LLM, é necessário o Ollama rodando com o modelo configurado em `LLM_MODEL` (padrão `mistral`) baixado:
+`.env` é carregado automaticamente na importação (`src/config.py`) — não precisa exportar as variáveis manualmente no shell. Para a tool `search_code` funcionar (card 08), preencha `GITHUB_TOKEN` com um [personal access token](https://github.com/settings/tokens) com escopo mínimo de leitura de código, e `GITHUB_REPO` com `owner/repo`. Sem essas duas variáveis, `search_codebase` degrada para lista vazia em vez de falhar. Para o LLM, é necessário o Ollama rodando com o modelo configurado em `LLM_MODEL` (padrão `mistral`) baixado:
 
 ```bash
 ollama serve            # em um terminal separado, se ainda não estiver rodando
 ollama pull mistral      # uma vez, baixa o modelo (~4.4 GB)
+ollama pull nomic-embed-text   # modelo de embedding usado pelo RAG (card 13)
 ```
 
 ### Rodando os testes
 
 ```bash
-python -m pytest tests/ -v
+python -m pytest -v
 ```
 
-A suíte padrão não depende do Ollama estar rodando — o LLM é mockado nos testes de `extract_requirement` e do grafo. Para rodar também o smoke test contra o Ollama real:
+`pytest` já roda com `--cov` por padrão (`pyproject.toml`, card 22) e falha se a cobertura cair abaixo de 70% (RNF-05). A suíte padrão não depende do Ollama nem do GitHub estarem disponíveis — o LLM e as tools externas são mockados. Para rodar também os smoke tests contra serviços reais:
 
 ```bash
 RUN_OLLAMA_TESTS=1 python -m pytest tests/integration/test_extract_requirement_ollama.py -v
 RUN_GITHUB_TESTS=1 python -m pytest tests/integration/test_search_code_github.py tests/integration/test_fetch_history_github.py -v
 ```
 
-### Executando o grafo diretamente
+### Executando com Docker
 
-Sem API ainda, o jeito de ver o grafo rodando é invocá-lo direto em Python (requer Ollama no ar, ver acima):
+```bash
+docker compose up
+```
+
+Sobe a API (`http://localhost:8000`) e o n8n (`http://localhost:5678`). O Ollama continua rodando no host (`OLLAMA_BASE_URL=http://host.docker.internal:11434` por padrão) — não é containerizado neste projeto.
+
+### Interface mínima (API + página)
+
+```bash
+uvicorn src.api.app:app --reload
+```
+
+Abra `http://localhost:8000` — página única (card 30, RF-10) para submeter um requisito, ver o painel de aprovações pendentes e inspecionar a trilha de auditoria de uma sessão. Endpoints: `POST /analyze` (RF-01.2), `GET /approvals`/`POST /approvals/{session_id}` (RF-07.2), `GET /audit/{session_id}` (RF-09.4). Documentação interativa automática do FastAPI em `/docs`.
+
+### Executando o grafo diretamente
 
 ```python
 from src.graph.build import build_graph
@@ -236,32 +336,22 @@ resultado = graph.invoke(state)
 print(resultado["requirement"].feature_type, resultado["risk_level"], resultado["confidence"])
 ```
 
-`extract_requirement`, `search_codebase`, `fetch_history`, `retrieve_rag` e `publish_comment` já são reais; só `analyze_impact` (o LLM que classifica impactos/riscos) ainda é stub. Sem `GITHUB_TOKEN`/`GITHUB_REPO` configurados, sem o modelo de embedding (`OLLAMA_EMBED_MODEL`, padrão `nomic-embed-text`) baixado no Ollama, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado, a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — degradação esperada (seção 11 do PRD), não uma falha.
-
-**Cuidado com `DRY_RUN`.** Com `DRY_RUN=false` (padrão) e um requisito que chega com `issue_number` preenchido, `publish_comment` publica um comentário **real** na Issue do GitHub configurada em `GITHUB_REPO` — é uma ação irreversível de verdade, protegida por aprovação humana quando `human_review_required=true` (RF-08.3), mas não simulada. Deixe `DRY_RUN=true` para testar sem publicar nada; nesse modo (ou quando não há `issue_number`), o comentário é gravado em `audit/dry_run/{session_id}.md` em vez de publicado.
+`extract_requirement`, `search_codebase`, `fetch_history`, `retrieve_rag`, `guard_adversarial` e `publish_comment` já são reais; só `analyze_impact` (o LLM que classifica impactos/riscos a partir da evidência) ainda é stub. Sem `GITHUB_TOKEN`/`GITHUB_REPO` configurados, sem o modelo de embedding baixado, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado, a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — degradação esperada (seção 11 do PRD), não uma falha.
 
 ### Observabilidade: os dois sinais e uma investigação real
 
 Toda execução emite dois sinais correlacionados pelo mesmo `session_id` (seção 14 do PRD):
 
-- **Log estruturado (JSON)** — um evento `node_completed` por node, com `status` e `duration_ms`. Ligar o renderer JSON de verdade (por padrão os logs vão para o `logging` padrão do Python):
+- **Log estruturado (JSON)** — um evento `node_completed` por node, com `status` e `duration_ms`. Ligar o renderer JSON de verdade:
 
   ```python
   from src.observability.logging import configure_structured_logging
   configure_structured_logging()
   ```
 
-- **Trilha de auditoria (JSONL)** — um registro por decisão de autonomia (`ESCALATED`, `AUTO_PUBLISHED`, `APPROVED_PUBLISHED`, `BLOCKED_ADVERSARIAL`, `REJECTED_ARCHIVED`, `EXPIRED_ARCHIVED`, `PUBLISH_DENIED`), gravado em `AUDIT_LOG_PATH` (padrão `audit/trail.jsonl`).
+- **Trilha de auditoria (JSONL)** — um registro por decisão de autonomia (`ESCALATED`, `AUTO_PUBLISHED`, `APPROVED_PUBLISHED`, `BLOCKED_ADVERSARIAL`, `REJECTED_ARCHIVED`, `EXPIRED_ARCHIVED`, `PUBLISH_DENIED`), gravado em `AUDIT_LOG_PATH` (padrão `audit/trail.jsonl`). O painel `GET /approvals` da interface mínima deriva desse mesmo arquivo.
 
 Uma execução real reconstruída — linha do tempo dos nove nodes com latência de cada um, a decisão de autonomia tomada e a evidência que a sustentou, com os dois sinais correlacionados por `session_id` — está documentada em [`docs/evidencias/card-21-investigacao-execucao-real.md`](docs/evidencias/card-21-investigacao-execucao-real.md).
-
-### Interface mínima (API + página)
-
-```bash
-uvicorn src.api.app:app --reload
-```
-
-Abra `http://localhost:8000` — página única (card 30, RF-10) para submeter um requisito, ver o painel de aprovações pendentes e inspecionar a trilha de auditoria de uma sessão. Endpoints: `POST /analyze` (RF-01.2), `GET /approvals`/`POST /approvals/{session_id}` (RF-07.2), `GET /audit/{session_id}` (RF-09.4). Documentação interativa automática do FastAPI em `/docs`.
 
 ### Servidor MCP
 
@@ -279,17 +369,72 @@ Workflow exportado: [`docs/lowcode/workflow-n8n.json`](docs/lowcode/workflow-n8n
 
 **Reproduzindo localmente:**
 
-1. Suba o n8n (já incluso no `docker-compose.yml`):
+1. Suba o n8n (já incluso no `docker-compose.yml`, junto com a API):
 
    ```bash
-   docker compose up n8n
+   docker compose up
    ```
 
 2. Abra `http://localhost:5678`, crie a conta local de admin (primeira execução) e importe `docs/lowcode/workflow-n8n.json` (**Workflows → Import from File**).
 3. Configure as variáveis de ambiente do n8n (`docker-compose.yml` já repassa `RADAR_API_URL`, `RADAR_APPROVAL_URL` e `DISCORD_WEBHOOK_URL` do seu `.env`):
    - `DISCORD_WEBHOOK_URL` — crie um webhook num canal do seu servidor Discord (Configurações do Canal → Integrações → Webhooks) e cole a URL aqui. **Nunca** commite essa URL — ela vai só no seu `.env` local.
-   - `RADAR_API_URL`/`RADAR_APPROVAL_URL` — apontam para a API do RADAR (card 30, endpoint `/analyze` ainda a implementar).
+   - `RADAR_API_URL`/`RADAR_APPROVAL_URL` — já apontam para `http://radar:8000` (o serviço da API no mesmo `docker-compose.yml`, card 30).
 4. No node **GitHub Webhook**, copie a "Production URL" gerada pelo n8n e configure no repositório (**Settings → Webhooks → Add webhook**), evento `Issues`, `Content type: application/json`.
 5. Ative o workflow (toggle **Active**) e crie uma Issue com o label `analise-impacto` para testar.
 
-**Limitação conhecida deste card:** o node `POST /analyze` chama um endpoint que ainda não existe (card 30) — o fluxo está montado e documentado ponta a ponta, mas o teste end-to-end real (Issue → Discord) só é possível depois que a API for implementada. Também não foi possível validar a subida do container `n8n` localmente neste ambiente de desenvolvimento (Docker indisponível, mesma limitação já registrada no card 25 para `docker build`).
+**Limitação conhecida:** não foi possível validar a subida do container `n8n` nem um teste end-to-end real (Issue → Discord) neste ambiente de desenvolvimento — Docker não está disponível aqui (mesma limitação registrada nos cards 25/26/29 para `docker build`/`docker run`). O workflow foi validado sintaticamente (`json.load`) e a API que ele chama tem cobertura de teste E2E própria ([`tests/e2e/test_api.py`](tests/e2e/test_api.py), card 30).
+
+---
+
+## QA e qualidade
+
+- **Cobertura:** gate de 70% (RNF-05) aplicado por padrão em todo `pytest` (`pyproject.toml`, card 22); cobertura real do projeto está acima de 99%. Deliberadamente não perseguida a 100% em alguns módulos (chamadas de rede real, scripts CLI finos) — decisões documentadas em [`docs/evidencias/card-22-testes-unitarios.md`](docs/evidencias/card-22-testes-unitarios.md).
+- **Priorização por risco (manual, comportamentos centrais):** entrada adversarial nunca publica, risco `CRITICAL` nunca publica sem aprovação, `score_risk` é determinístico — seção 15 do PRD.
+- **Testes de integração e E2E:** os quatro cenários (ver [Cenários de uso](#cenários-de-uso)) mais aceitação via `TestClient` do FastAPI ([`tests/e2e/test_api.py`](tests/e2e/test_api.py), card 30).
+- **Code review com IA de um PR real:** revisão do PR que introduz `domain/risk.py` (o módulo de maior criticidade), com apontamentos aceitos e recusados com justificativa — [`docs/qa/code-review-pr-2.md`](docs/qa/code-review-pr-2.md), evidência em [`docs/evidencias/card-24-code-review-pr-real.md`](docs/evidencias/card-24-code-review-pr-real.md).
+- **Exemplos práticos de teste manual:** [`docs/qa/exemplos-de-testes.md`](docs/qa/exemplos-de-testes.md).
+
+---
+
+## DevOps: pipeline, logs e anomalias
+
+- **Pipeline CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml), card 25): `lint` (`ruff check` + `ruff format --check`), `test` (`pytest --cov`), `build` (`docker build`), `secrets-scan` (`gitleaks`). Roda em push para `develop` e em todo PR para `develop`/`main`.
+- **Análise de logs do pipeline com IA** ([`docs/devops/analise-logs.md`](docs/devops/analise-logs.md), card 26): logs reais de duas execuções do CI analisados — 46 warnings do pytest reduzidos a 12 (conexões sqlite não fechadas, dublês de `EmbeddingFunction` incompletos), e o Dockerfile corrigido para não rodar como root.
+- **Dataset e detecção de anomalia** ([`docs/devops/anomalia-taxa-escalacao.md`](docs/devops/anomalia-taxa-escalacao.md), card 27): 50 execuções simuladas ([`docs/devops/dataset-execucoes.csv`](docs/devops/dataset-execucoes.csv), com `confidence` calculado pela fórmula real de produção); baseline univariado (taxa de escalação por janela) identifica uma anomalia clara a partir da janela 4.
+- **Estimativa de tendência** ([`docs/devops/tendencia-risco.md`](docs/devops/tendencia-risco.md), card 28): regressão linear simples sobre a taxa de escalação por janela, projetando a janela seguinte; projeção de 93% dispara alerta de degradação (limiar 50%).
+
+---
+
+## Prompts e refinamento
+
+Prompts versionados e documentados em [`docs/prompts/`](docs/prompts/): objetivo, regras de comportamento, restrições e formato de saída de cada um.
+
+| Arquivo | Node | Card |
+|---|---|---|
+| [`01-extract-requirement.md`](docs/prompts/01-extract-requirement.md) | `extract_requirement` | 06 |
+| [`02-guard-adversarial.md`](docs/prompts/02-guard-adversarial.md) | `guard_adversarial` | 18 |
+
+`03-analyze-impact.md`/`04-compose-report.md` chegam junto com a implementação real de `analyze_impact` (ainda stub).
+
+**Refinamento de prompt (card 32):** análise crítica de um ciclo de refinamento (problema observado, alteração aplicada, resultado antes/depois) — pendente, documentado em `docs/prompts/refinamento.md` quando o card 32 for concluído.
+
+---
+
+## Vídeo de demonstração
+
+Card 33, pendente — vídeo de até 10 minutos, não listado, com o link a ser adicionado aqui antes da submissão final (card 34).
+
+---
+
+## Limitações conhecidas e evolução futura
+
+Adaptado da seção 25 do PRD:
+
+- A busca de código é textual, não semântica — renomeações e abstrações escapam.
+- O corpus de padrões cobre dez tipos de feature; requisitos fora deles caem em `"outro"` e perdem confiança.
+- A probabilidade dos riscos do requisito analisado (RF-05) é estimada pelo LLM, não derivada de dados históricos reais.
+- O dataset de anomalia (card 27) é simulado (50 execuções), por ausência de volume real de produção.
+- Sem controle de acesso — qualquer pessoa com acesso ao painel pode aprovar (RF-10 não inclui autenticação).
+- `analyze_impact` (classificação real de impactos/riscos por LLM) permanece stub — `impacts`/`risks` ficam vazios em execuções reais até essa peça existir; os cenários 2/3 dos testes mockam essa saída para exercitar o resto do pipeline.
+
+**Evolução futura:** análise de dependências via AST para substituir a busca textual; calibração de probabilidade com incidentes reais; autenticação e papéis no fluxo de aprovação; suporte a Jira/Azure DevOps além do GitHub. Técnicas adicionais ensinadas no módulo (orçamento de execução, mutation testing, testes por propriedade, avaliação LLM-as-judge, Isolation Forest, classificador calibrado) estão especificadas na seção 21 do PRD (cards 35–41) como extensão pós-rubrica — risco de pendência aceito conscientemente (seção 23 do PRD), não fazem parte dos 34 cards centrais que este README documenta.
