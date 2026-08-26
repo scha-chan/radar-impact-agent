@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>RADAR — Análise de Impacto e Risco</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; color: #1b1f24; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.1rem; margin-top: 2.5rem; border-bottom: 1px solid #ddd; padding-bottom: .3rem; }
+  textarea { width: 100%; min-height: 6rem; font: inherit; box-sizing: border-box; }
+  input[type=number], input[type=text] { font: inherit; padding: .3rem; }
+  button { font: inherit; padding: .4rem .9rem; cursor: pointer; }
+  button.approve { background: #1a7f37; color: #fff; border: none; border-radius: 4px; }
+  button.reject { background: #cf222e; color: #fff; border: none; border-radius: 4px; }
+  pre { background: #f6f8fa; padding: .75rem; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
+  table { border-collapse: collapse; width: 100%; margin-top: .5rem; }
+  th, td { border: 1px solid #ddd; padding: .4rem .6rem; text-align: left; font-size: .85rem; }
+  .pending-item { border: 1px solid #ddd; border-radius: 6px; padding: .75rem; margin-bottom: .6rem; }
+  .status { display: inline-block; padding: .1rem .5rem; border-radius: 4px; font-size: .8rem; font-weight: 600; }
+  .status-published { background: #dafbe1; color: #1a7f37; }
+  .status-pending_approval { background: #fff8c5; color: #9a6700; }
+  .status-blocked { background: #ffebe9; color: #cf222e; }
+  .status-archived { background: #eee; color: #555; }
+  .muted { color: #666; font-size: .85rem; }
+</style>
+</head>
+<body>
+
+<h1>RADAR — Análise de Impacto e Risco de Requisitos</h1>
+<p class="muted">Interface mínima (card 30) — submissão de requisito, aprovações pendentes e trilha de auditoria.</p>
+
+<h2>Submeter requisito</h2>
+<form id="analyze-form">
+  <textarea id="text" placeholder="Descreva a mudança de requisito..." required></textarea>
+  <div style="margin-top:.5rem;">
+    <label class="muted">Issue # (opcional): <input type="number" id="issue_number"></label>
+    <button type="submit">Analisar</button>
+  </div>
+</form>
+<pre id="analyze-result" style="display:none;"></pre>
+
+<h2>Aprovações pendentes <button id="refresh-approvals" type="button">Atualizar</button></h2>
+<div id="approvals-list" class="muted">Clique em "Atualizar" para carregar.</div>
+
+<h2>Trilha de auditoria</h2>
+<div>
+  <input type="text" id="audit-session-id" placeholder="session_id">
+  <button id="load-audit" type="button">Ver trilha</button>
+</div>
+<div id="audit-result"></div>
+
+<script>
+async function analyzeRequirement(event) {
+  event.preventDefault();
+  const text = document.getElementById('text').value;
+  const issueNumberRaw = document.getElementById('issue_number').value;
+  const body = { text };
+  if (issueNumberRaw) body.issue_number = parseInt(issueNumberRaw, 10);
+
+  const resp = await fetch('/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json();
+  const out = document.getElementById('analyze-result');
+  out.style.display = 'block';
+  out.textContent = JSON.stringify(data, null, 2);
+  if (data.status === 'pending_approval') refreshApprovals();
+}
+
+function statusBadge(status) {
+  return `<span class="status status-${status}">${status}</span>`;
+}
+
+async function refreshApprovals() {
+  const container = document.getElementById('approvals-list');
+  container.textContent = 'Carregando...';
+  const resp = await fetch('/approvals');
+  const items = await resp.json();
+  if (items.length === 0) {
+    container.innerHTML = '<span class="muted">Nenhuma aprovação pendente.</span>';
+    return;
+  }
+  container.innerHTML = items.map(item => `
+    <div class="pending-item" data-session="${item.session_id}">
+      <div><strong>${item.session_id}</strong> — risco: ${item.risk_level ?? '—'},
+        confiança: ${item.confidence ?? '—'} (threshold: ${item.threshold ?? '—'})</div>
+      <div class="muted">escalado em ${item.escalated_at}</div>
+      <div style="margin-top:.4rem;">
+        <button class="approve" onclick="decide('${item.session_id}', 'APPROVED')">Aprovar</button>
+        <button class="reject" onclick="decide('${item.session_id}', 'REJECTED')">Rejeitar</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function decide(sessionId, decision) {
+  const resp = await fetch(`/approvals/${sessionId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision }),
+  });
+  const data = await resp.json();
+  alert(`Sessão ${sessionId}: ${data.status}` + (data.published_comment_url ? `\n${data.published_comment_url}` : ''));
+  refreshApprovals();
+}
+
+async function loadAudit() {
+  const sessionId = document.getElementById('audit-session-id').value.trim();
+  const container = document.getElementById('audit-result');
+  if (!sessionId) return;
+  const resp = await fetch(`/audit/${sessionId}`);
+  if (resp.status === 404) {
+    container.innerHTML = '<span class="muted">Nenhuma auditoria encontrada para essa sessão.</span>';
+    return;
+  }
+  const entries = await resp.json();
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>Timestamp</th><th>Decisão</th><th>Ator</th><th>Risco</th><th>Confiança</th><th>Detalhe</th></tr></thead>
+      <tbody>
+        ${entries.map(e => `
+          <tr>
+            <td>${e.timestamp}</td>
+            <td>${e.decision}</td>
+            <td>${e.actor}</td>
+            <td>${e.risk_level ?? '—'}</td>
+            <td>${e.confidence ?? '—'}</td>
+            <td>${e.reason ?? e.tool_authorized ?? '—'}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+document.getElementById('analyze-form').addEventListener('submit', analyzeRequirement);
+document.getElementById('refresh-approvals').addEventListener('click', refreshApprovals);
+document.getElementById('load-audit').addEventListener('click', loadAudit);
+</script>
+</body>
+</html>

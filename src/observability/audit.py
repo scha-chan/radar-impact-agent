@@ -70,21 +70,40 @@ def record_audit(record: AuditRecord, *, path: str | None = None) -> None:
         f.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
 
 
-def read_audit_trail(session_id: str, *, path: str | None = None) -> list[dict]:
-    """Lê e filtra as entradas de uma sessão, na ordem em que foram
-    gravadas — a base de dados para reconstruir uma execução real (card 21)
-    e para o endpoint `GET /audit/{session_id}` (RF-09.4, card 30).
-    """
+def read_all_entries(*, path: str | None = None) -> list[dict]:
+    """Lê todas as entradas da trilha, de todas as sessões, na ordem em que
+    foram gravadas. Base para `read_audit_trail` (filtrado) e
+    `list_pending_sessions` (RF-10.2, card 30)."""
     target = Path(path or AUDIT_LOG_PATH)
     if not target.exists():
         return []
-    records = []
+    entries = []
     with target.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            entry = json.loads(line)
-            if entry.get("session_id") == session_id:
-                records.append(entry)
-    return records
+            entries.append(json.loads(line))
+    return entries
+
+
+def read_audit_trail(session_id: str, *, path: str | None = None) -> list[dict]:
+    """Lê e filtra as entradas de uma sessão, na ordem em que foram
+    gravadas — a base de dados para reconstruir uma execução real (card 21)
+    e para o endpoint `GET /audit/{session_id}` (RF-09.4, card 30).
+    """
+    return [entry for entry in read_all_entries(path=path) if entry.get("session_id") == session_id]
+
+
+def list_pending_sessions(*, path: str | None = None) -> list[dict]:
+    """RF-10.2 (card 30): sessões aguardando aprovação — a última decisão
+    registrada para a sessão é `ESCALATED`, sem nenhuma resolução
+    (`APPROVED_PUBLISHED`/`REJECTED_ARCHIVED`/`EXPIRED_ARCHIVED`/
+    `PUBLISH_DENIED`) depois dela. Deriva do sinal 2 de observabilidade já
+    existente (card 20) em vez de manter um registro de "pendentes" à
+    parte — a trilha de auditoria já é a fonte de verdade de qual foi a
+    última decisão de cada sessão."""
+    last_entry_by_session: dict[str, dict] = {}
+    for entry in read_all_entries(path=path):
+        last_entry_by_session[entry["session_id"]] = entry
+    return [entry for entry in last_entry_by_session.values() if entry["decision"] == "ESCALATED"]
