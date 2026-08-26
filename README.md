@@ -169,3 +169,56 @@ sozinho ou se uma ação irreversível é autorizada.
 
 Detalhes completos de escopo, requisitos funcionais e cenários: seções 5, 9 e
 12 do [PRD](docs/PRD-RADAR-Agente-Impacto-Risco.md).
+
+---
+
+## Instalação e execução
+
+> Esta seção acompanha o desenvolvimento — reflete só o que já está implementado. Hoje isso é o grafo (com nodes stub) e a suíte de testes; API, servidor MCP e `docker compose up` chegam nos próximos cards e serão adicionados aqui quando existirem (RNF-06).
+
+### Pré-requisitos
+
+- Python 3.11+ (desenvolvido e testado com 3.14)
+- Git
+
+### Configuração
+
+```bash
+git clone https://github.com/scha-chan/radar-impact-agent.git
+cd radar-impact-agent
+
+python -m venv venv
+# Windows
+venv\Scripts\activate
+# Linux/macOS
+source venv/bin/activate
+
+pip install -r requirements.txt
+
+cp .env.example .env
+```
+
+`.env` não precisa de valores reais ainda — nenhuma integração externa (LLM, GitHub) está implementada nesta etapa. Ver `.env.example` para as variáveis já previstas (seção 18 do PRD).
+
+### Rodando os testes
+
+```bash
+python -m pytest tests/ -v
+```
+
+### Executando o grafo (stub) diretamente
+
+Sem API ainda, o jeito de ver o grafo rodando é invocá-lo direto em Python:
+
+```python
+from src.graph.build import build_graph
+from src.graph.state import create_initial_state
+
+graph = build_graph()
+state = create_initial_state("Adicionar filtro por data na listagem de pedidos")
+resultado = graph.invoke(state)
+
+print(resultado["risk_level"], resultado["confidence"], resultado["human_review_required"])
+```
+
+Com os nodes de evidência ainda stub (listas vazias), a confiança calculada fica abaixo do threshold padrão (70) e o resultado sempre escala para aprovação humana — comportamento esperado até os cards 8, 9 e 13 (busca de código, histórico e RAG) substituírem os stubs por integrações reais.
