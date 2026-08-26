@@ -95,6 +95,47 @@ def test_fetch_history_respects_max_results():
 
 
 @respx.mock
+def test_fetch_history_skips_commit_items_without_sha():
+    respx.get("https://api.github.com/search/commits").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [
+                    {"sha": "", "commit": {"message": "sem sha"}},
+                    {"sha": "abcdef1234567890", "commit": {"message": "com sha"}},
+                ]
+            },
+        )
+    )
+    respx.get("https://api.github.com/search/issues").mock(
+        return_value=httpx.Response(200, json={"items": []})
+    )
+
+    entries = fetch_history(["risk"], repo="owner/repo", github_token="tok")
+
+    assert len(entries) == 1
+    assert entries[0].description == "com sha"
+
+
+@respx.mock
+def test_fetch_history_skips_pr_items_without_number():
+    respx.get("https://api.github.com/search/commits").mock(
+        return_value=httpx.Response(200, json={"items": []})
+    )
+    respx.get("https://api.github.com/search/issues").mock(
+        return_value=httpx.Response(
+            200,
+            json={"items": [{"title": "sem numero"}, {"number": 7, "title": "com numero"}]},
+        )
+    )
+
+    entries = fetch_history(["risk"], repo="owner/repo", github_token="tok")
+
+    assert len(entries) == 1
+    assert entries[0].ref == "PR #7"
+
+
+@respx.mock
 def test_fetch_history_records_failure_when_both_endpoints_exhaust_retries(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda *_: None)
     respx.get("https://api.github.com/search/commits").mock(return_value=httpx.Response(403))
