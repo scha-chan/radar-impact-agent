@@ -92,6 +92,21 @@ class ConfidenceInputs:
     risks: list[RiskItem] = field(default_factory=list)
 
 
+# Deducoes da formula de confianca (PRD secao 11) — nomeadas para que cada
+# uma mapeie de volta a uma linha especifica da tabela do PRD, em vez de um
+# numero solto dentro de calculate_confidence (card 24, code review do PR #2).
+SHORT_REQUIREMENT_WORD_THRESHOLD = 15
+SHORT_REQUIREMENT_PENALTY = 20
+NO_CODE_MATCH_PENALTY = 25
+FEATURE_TYPE_OUTRO_PENALTY = 15
+NO_RAG_PATTERN_PENALTY = 20
+TOOL_FAILED_WITH_FALLBACK_PENALTY = 15
+MIN_DISTINCT_EVIDENCE_SOURCES = 2
+FEW_EVIDENCE_SOURCES_PENALTY = 10
+RISK_WITHOUT_MITIGATION_PENALTY = 5
+RISK_WITHOUT_MITIGATION_PENALTY_CAP = 15
+
+
 def calculate_confidence(inputs: ConfidenceInputs) -> int:
     """Confianca (0-100): mede a qualidade da evidencia disponivel, nao a
     certeza do modelo. Comeca em 100 e sofre deducoes cumulativas; piso 0,
@@ -99,21 +114,24 @@ def calculate_confidence(inputs: ConfidenceInputs) -> int:
     """
     score = 100
 
-    if inputs.requirement_word_count < 15:
-        score -= 20
+    if inputs.requirement_word_count < SHORT_REQUIREMENT_WORD_THRESHOLD:
+        score -= SHORT_REQUIREMENT_PENALTY
     if not inputs.code_matches_found:
-        score -= 25
+        score -= NO_CODE_MATCH_PENALTY
     if inputs.feature_type == "outro":
-        score -= 15
+        score -= FEATURE_TYPE_OUTRO_PENALTY
     if not inputs.rag_patterns_found:
-        score -= 20
+        score -= NO_RAG_PATTERN_PENALTY
 
-    score -= 15 * inputs.tools_failed_with_fallback
+    score -= TOOL_FAILED_WITH_FALLBACK_PENALTY * inputs.tools_failed_with_fallback
 
-    if inputs.distinct_evidence_sources < 2:
-        score -= 10
+    if inputs.distinct_evidence_sources < MIN_DISTINCT_EVIDENCE_SOURCES:
+        score -= FEW_EVIDENCE_SOURCES_PENALTY
 
     risks_without_mitigation = sum(1 for r in inputs.risks if not r.mitigation)
-    score -= min(5 * risks_without_mitigation, 15)
+    score -= min(
+        RISK_WITHOUT_MITIGATION_PENALTY * risks_without_mitigation,
+        RISK_WITHOUT_MITIGATION_PENALTY_CAP,
+    )
 
     return max(0, min(100, score))
