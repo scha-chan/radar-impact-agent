@@ -13,11 +13,11 @@ fazem I/O.
 """
 
 import time
-from unittest.mock import MagicMock
 
 from src.graph import nodes
 from src.graph.build import build_graph
 from src.graph.state import Requirement, create_initial_state
+from tests.helpers import mock_llm
 
 
 def _fake_io_call(*_args, **_kwargs):
@@ -36,12 +36,7 @@ def _run_evidence_nodes_sequentially(state) -> float:
 def test_send_fan_out_runs_evidence_nodes_concurrently(monkeypatch):
     # extract_requirement chama um LLM real; mockado aqui para o benchmark
     # medir só o fan-out via Send, não latência de rede do Ollama.
-    fake_requirement = Requirement(
-        text="x", feature_type="outro", search_terms=["termo"]
-    )
-    chat_model = MagicMock()
-    chat_model.with_structured_output.return_value.invoke.return_value = fake_requirement
-    monkeypatch.setattr(nodes, "build_chat_model", lambda **_: chat_model)
+    mock_llm(monkeypatch, feature_type="outro", search_terms=["termo"])
 
     # search_codebase e fetch_history já são reais (cards 8-9); simulamos a
     # latência de rede deles para o benchmark não depender de GITHUB_TOKEN.
@@ -52,7 +47,7 @@ def test_send_fan_out_runs_evidence_nodes_concurrently(monkeypatch):
     # search_codebase/fetch_history só chamam a rede se houver search_terms;
     # graph.invoke() preenche isso via extract_requirement (mockado acima),
     # mas a medição sequencial chama os nodes direto, sem passar por ele.
-    state["requirement"] = fake_requirement
+    state["requirement"] = Requirement(text="x", feature_type="outro", search_terms=["termo"])
 
     sequential_seconds = _run_evidence_nodes_sequentially(state)
 

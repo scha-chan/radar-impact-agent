@@ -6,14 +6,13 @@ com `Command(resume=...)`, que é o mecanismo que a rota vai chamar).
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
-from src.graph import nodes
 from src.graph.build import build_graph
-from src.graph.state import Requirement, create_initial_state
+from src.graph.state import create_initial_state
+from tests.helpers import mock_llm
 
 
 def _mock_llm(monkeypatch):
@@ -21,12 +20,12 @@ def _mock_llm(monkeypatch):
     # (search_code/retrieve_patterns/fetch_history mockados ou reais com
     # search_terms=[] retornam vazio) -> confiança abaixo do threshold,
     # mesmo cenário de baixa evidência de test_graph.py.
-    fake_requirement = Requirement(
-        text="Adicionar filtro por data na listagem", feature_type="outro", search_terms=[]
+    mock_llm(
+        monkeypatch,
+        feature_type="outro",
+        search_terms=[],
+        requirement_text="Adicionar filtro por data na listagem",
     )
-    chat_model = MagicMock()
-    chat_model.with_structured_output.return_value.invoke.return_value = fake_requirement
-    monkeypatch.setattr(nodes, "build_chat_model", lambda **_: chat_model)
 
 
 def _checkpointer(db_path) -> SqliteSaver:

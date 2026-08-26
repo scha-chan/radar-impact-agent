@@ -18,14 +18,13 @@ embedding configurado (`OLLAMA_EMBED_MODEL`), o que tornaria a dedução de
 confiança abaixo não determinística.
 """
 
-from unittest.mock import MagicMock
-
 import httpx
 import respx
 
 from src.graph import nodes
 from src.graph.build import build_graph
-from src.graph.state import Requirement, create_initial_state
+from src.graph.state import create_initial_state
+from tests.helpers import mock_llm
 
 
 @respx.mock
@@ -38,14 +37,12 @@ def test_scenario_4_search_code_rate_limited_escalates_with_documented_deduction
     monkeypatch.setattr(nodes, "retrieve_patterns", lambda *_a, **_k: [])
 
     # LLM mockado: um unico termo de busca, para contar tentativas com precisao.
-    fake_requirement = Requirement(
-        text="Adicionar filtro por data na listagem de pedidos",
+    mock_llm(
+        monkeypatch,
         feature_type="listagem",
         search_terms=["pedidos"],
+        requirement_text="Adicionar filtro por data na listagem de pedidos",
     )
-    chat_model = MagicMock()
-    chat_model.with_structured_output.return_value.invoke.return_value = fake_requirement
-    monkeypatch.setattr(nodes, "build_chat_model", lambda **_: chat_model)
 
     # search_code: 403 consistente (rate limit) - RF-03.5 tenta 3x (1 + 2 retries).
     code_route = respx.get("https://api.github.com/search/code").mock(
