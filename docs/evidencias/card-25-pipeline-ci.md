@@ -35,7 +35,7 @@ Corrigido travando a versão em ambos os lugares: `requirements.txt` (`ruff==0.1
 
 `pytest -q`: 167 passed, 3 skipped (Ollama real), 99,10% de cobertura — suíte não depende de Docker, Ollama real nem `GITHUB_TOKEN` para passar (os testes que precisam desses recursos já eram condicionados a env vars, `RUN_OLLAMA_TESTS`/`RUN_GITHUB_TESTS`, README seção "Rodando os testes"). `ruff check .` e `ruff format --check .`: sem apontamentos, repositório inteiro.
 
-Build do Docker (`docker build -t radar:ci .`) não pôde ser testado localmente (Docker não disponível no ambiente de desenvolvimento) — validado pela execução real do workflow no GitHub Actions após o push (link do run: ver o badge de CI no README, ou a aba Actions do repositório).
+Build do Docker (`docker build -t radar:ci .`) não pôde ser testado localmente (Docker não disponível no ambiente de desenvolvimento) — validado pela execução real do workflow no GitHub Actions, disparada pelo próprio PR deste card: [run #33013358793](https://github.com/scha-chan/radar-impact-agent/actions/runs/33013358793), com os quatro jobs verdes (`secrets-scan` 9s, `lint` 15s, `test` 46s, `build` 42s) — a mesma execução que pegou e corrigiu o achado da versão do `ruff` abaixo, na tentativa anterior (run #33013041270, falhou só no `lint`).
 
 ## Decisões técnicas
 
