@@ -1,7 +1,5 @@
 from unittest.mock import MagicMock
 
-import pytest
-
 from src.graph import nodes
 from src.graph.state import Requirement, create_initial_state
 
