@@ -234,9 +234,24 @@ resultado = graph.invoke(state)
 print(resultado["requirement"].feature_type, resultado["risk_level"], resultado["confidence"])
 ```
 
-`extract_requirement`, `search_codebase`, `fetch_history` e `publish_comment` já são reais; só o RAG (card 13) ainda é stub. Sem um `GITHUB_TOKEN`/`GITHUB_REPO` configurados, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado (atraso de indexação é normal em repositórios novos), a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — comportamento esperado até o card 13 substituir o último stub.
+`extract_requirement`, `search_codebase`, `fetch_history`, `retrieve_rag` e `publish_comment` já são reais; só `analyze_impact` (o LLM que classifica impactos/riscos) ainda é stub. Sem `GITHUB_TOKEN`/`GITHUB_REPO` configurados, sem o modelo de embedding (`OLLAMA_EMBED_MODEL`, padrão `nomic-embed-text`) baixado no Ollama, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado, a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — degradação esperada (seção 11 do PRD), não uma falha.
 
 **Cuidado com `DRY_RUN`.** Com `DRY_RUN=false` (padrão) e um requisito que chega com `issue_number` preenchido, `publish_comment` publica um comentário **real** na Issue do GitHub configurada em `GITHUB_REPO` — é uma ação irreversível de verdade, protegida por aprovação humana quando `human_review_required=true` (RF-08.3), mas não simulada. Deixe `DRY_RUN=true` para testar sem publicar nada; nesse modo (ou quando não há `issue_number`), o comentário é gravado em `audit/dry_run/{session_id}.md` em vez de publicado.
+
+### Observabilidade: os dois sinais e uma investigação real
+
+Toda execução emite dois sinais correlacionados pelo mesmo `session_id` (seção 14 do PRD):
+
+- **Log estruturado (JSON)** — um evento `node_completed` por node, com `status` e `duration_ms`. Ligar o renderer JSON de verdade (por padrão os logs vão para o `logging` padrão do Python):
+
+  ```python
+  from src.observability.logging import configure_structured_logging
+  configure_structured_logging()
+  ```
+
+- **Trilha de auditoria (JSONL)** — um registro por decisão de autonomia (`ESCALATED`, `AUTO_PUBLISHED`, `APPROVED_PUBLISHED`, `BLOCKED_ADVERSARIAL`, `REJECTED_ARCHIVED`, `EXPIRED_ARCHIVED`, `PUBLISH_DENIED`), gravado em `AUDIT_LOG_PATH` (padrão `audit/trail.jsonl`).
+
+Uma execução real reconstruída — linha do tempo dos nove nodes com latência de cada um, a decisão de autonomia tomada e a evidência que a sustentou, com os dois sinais correlacionados por `session_id` — está documentada em [`docs/evidencias/card-21-investigacao-execucao-real.md`](docs/evidencias/card-21-investigacao-execucao-real.md).
 
 ### Servidor MCP
 
