@@ -7,9 +7,11 @@ def test_build_checkpointer_returns_a_usable_sqlite_saver(tmp_path):
     db_path = tmp_path / "checkpoints.db"
 
     checkpointer = build_checkpointer(str(db_path))
-
-    assert isinstance(checkpointer, SqliteSaver)
-    assert db_path.exists()
+    try:
+        assert isinstance(checkpointer, SqliteSaver)
+        assert db_path.exists()
+    finally:
+        checkpointer.conn.close()
 
 
 def test_build_checkpointer_allows_access_from_a_different_thread(tmp_path):
@@ -28,8 +30,11 @@ def test_build_checkpointer_allows_access_from_a_different_thread(tmp_path):
         except Exception as exc:  # noqa: BLE001 - queremos ver qualquer falha de thread
             errors.append(exc)
 
-    thread = threading.Thread(target=_use_from_another_thread)
-    thread.start()
-    thread.join()
+    try:
+        thread = threading.Thread(target=_use_from_another_thread)
+        thread.start()
+        thread.join()
 
-    assert errors == []
+        assert errors == []
+    finally:
+        checkpointer.conn.close()

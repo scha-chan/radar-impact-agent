@@ -12,7 +12,7 @@ from langgraph.types import Command
 
 from src.graph.build import build_graph
 from src.graph.state import create_initial_state
-from tests.helpers import mock_llm
+from tests.helpers import mock_llm, sqlite_checkpointer
 
 
 def _mock_llm(monkeypatch):
@@ -28,14 +28,9 @@ def _mock_llm(monkeypatch):
     )
 
 
-def _checkpointer(db_path) -> SqliteSaver:
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    return SqliteSaver(conn)
-
-
 def test_human_approval_pauses_the_graph_when_confidence_is_low(tmp_path, monkeypatch):
     _mock_llm(monkeypatch)
-    graph = build_graph(checkpointer=_checkpointer(tmp_path / "checkpoints.db"))
+    graph = build_graph(checkpointer=sqlite_checkpointer(tmp_path / "checkpoints.db"))
     state = create_initial_state("Adicionar filtro por data na listagem")
     config = {"configurable": {"thread_id": state["session_id"]}}
 
@@ -50,7 +45,7 @@ def test_human_approval_pauses_the_graph_when_confidence_is_low(tmp_path, monkey
 def test_human_approval_resumes_and_publishes_on_approval(tmp_path, monkeypatch):
     _mock_llm(monkeypatch)
     monkeypatch.chdir(tmp_path)
-    graph = build_graph(checkpointer=_checkpointer(tmp_path / "checkpoints.db"))
+    graph = build_graph(checkpointer=sqlite_checkpointer(tmp_path / "checkpoints.db"))
     state = create_initial_state("Adicionar filtro por data na listagem")
     config = {"configurable": {"thread_id": state["session_id"]}}
     graph.invoke(state, config=config)
@@ -65,7 +60,7 @@ def test_human_approval_resumes_and_publishes_on_approval(tmp_path, monkeypatch)
 
 def test_human_approval_resumes_and_archives_on_rejection(tmp_path, monkeypatch):
     _mock_llm(monkeypatch)
-    graph = build_graph(checkpointer=_checkpointer(tmp_path / "checkpoints.db"))
+    graph = build_graph(checkpointer=sqlite_checkpointer(tmp_path / "checkpoints.db"))
     state = create_initial_state("Adicionar filtro por data na listagem")
     config = {"configurable": {"thread_id": state["session_id"]}}
     graph.invoke(state, config=config)
@@ -81,7 +76,7 @@ def test_human_approval_sets_expiry_when_pausing(tmp_path, monkeypatch):
     # pausa - human_approval so consegue checar TTL porque o valor ja esta
     # no state congelado pelo checkpointer.
     _mock_llm(monkeypatch)
-    graph = build_graph(checkpointer=_checkpointer(tmp_path / "checkpoints.db"))
+    graph = build_graph(checkpointer=sqlite_checkpointer(tmp_path / "checkpoints.db"))
     state = create_initial_state("Adicionar filtro por data na listagem")
     config = {"configurable": {"thread_id": state["session_id"]}}
 
@@ -96,7 +91,7 @@ def test_expired_approval_archives_even_when_late_decision_is_approved(tmp_path,
     # RF-07.4: uma aprovacao que chega depois do TTL nao publica - o grafo
     # "retoma e arquiva", mesmo que o valor de resume seja "APPROVED".
     _mock_llm(monkeypatch)
-    graph = build_graph(checkpointer=_checkpointer(tmp_path / "checkpoints.db"))
+    graph = build_graph(checkpointer=sqlite_checkpointer(tmp_path / "checkpoints.db"))
     state = create_initial_state("Adicionar filtro por data na listagem")
     config = {"configurable": {"thread_id": state["session_id"]}}
     graph.invoke(state, config=config)
@@ -134,6 +129,7 @@ def test_checkpointer_persists_state_across_reconnection(tmp_path, monkeypatch):
     conn2 = sqlite3.connect(db_path, check_same_thread=False)
     graph2 = build_graph(checkpointer=SqliteSaver(conn2))
     result = graph2.invoke(Command(resume="APPROVED"), config=config)
+    conn2.close()
 
     assert result["approval_decision"] == "APPROVED"
     assert result["published_comment_url"] is not None

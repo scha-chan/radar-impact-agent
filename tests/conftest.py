@@ -1,5 +1,7 @@
 import pytest
 
+from tests.helpers import close_all_sqlite_connections
+
 
 @pytest.fixture(autouse=True)
 def _isolate_cwd(tmp_path, monkeypatch):
@@ -12,3 +14,13 @@ def _isolate_cwd(tmp_path, monkeypatch):
     `tmp_path` diretamente (ambos são o mesmo fixture, `function`-scoped).
     """
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _close_sqlite_connections():
+    """Achado do card 26 (análise do log do job "test" da CI): conexões
+    sqlite abertas via `tests.helpers.sqlite_checkpointer` ficavam sem
+    fechar, gerando `ResourceWarning: unclosed database` no relatório do
+    pytest. Fecha qualquer conexão registrada ao fim de cada teste."""
+    yield
+    close_all_sqlite_connections()

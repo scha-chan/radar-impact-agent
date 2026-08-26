@@ -22,10 +22,21 @@ _collection_names = (f"test-patterns-{i}" for i in itertools.count())
 
 class _HashEmbeddingFunction(EmbeddingFunction):
     """Embedding falso e determinístico: textos iguais (ou com os mesmos
-    tokens) ficam próximos, sem chamar nenhum serviço externo."""
+    tokens) ficam próximos, sem chamar nenhum serviço externo. Implementa
+    `__init__`/`name()` explicitamente (achado do card 26 — ver
+    `_FakeEmbeddingFunction` em `test_rag_ingest.py`)."""
+
+    def __init__(self) -> None:
+        pass
 
     def __call__(self, input: Documents) -> Embeddings:  # noqa: A002
         return [_vector_for(text) for text in input]
+
+    def name(self) -> str:
+        return "hash-embedding-function"
+
+    def get_config(self) -> dict:
+        return {}
 
 
 def _vector_for(text: str) -> list[float]:
