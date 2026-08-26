@@ -12,14 +12,27 @@ SDK oficial `mcp` (v2.x) — a classe de alto nível chama-se `MCPServer`
 
 from __future__ import annotations
 
+import os
+
 from mcp.server.mcpserver import MCPServer
+
+from src import config  # noqa: F401 - carrega .env como efeito colateral do import
+from src.mcp_server.tools.search_code import search_code as _search_code
 
 SERVER_NAME = "radar-mcp-server"
 SERVER_VERSION = "0.1.0"
 
 
 def build_server() -> MCPServer:
-    return MCPServer(name=SERVER_NAME, version=SERVER_VERSION)
+    mcp_server = MCPServer(name=SERVER_NAME, version=SERVER_VERSION)
+
+    @mcp_server.tool()
+    def search_code(search_terms: list[str], repo: str) -> list[dict]:
+        """Busca termos no código-fonte de um repositório GitHub; retorna arquivos e trechos."""
+        matches = _search_code(search_terms, repo=repo, github_token=os.getenv("GITHUB_TOKEN", ""))
+        return [match.model_dump() for match in matches]
+
+    return mcp_server
 
 
 server = build_server()

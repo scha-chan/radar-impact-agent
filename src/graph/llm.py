@@ -12,6 +12,8 @@ import os
 
 from langchain_ollama import ChatOllama
 
+from src import config  # noqa: F401 - carrega .env como efeito colateral do import
+
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 LLM_MODEL = os.getenv("LLM_MODEL", "mistral")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
