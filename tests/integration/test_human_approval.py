@@ -5,6 +5,7 @@ com `Command(resume=...)`, que é o mecanismo que a rota vai chamar).
 """
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -71,6 +72,42 @@ def test_human_approval_resumes_and_archives_on_rejection(tmp_path, monkeypatch)
     graph.invoke(state, config=config)
 
     result = graph.invoke(Command(resume="REJECTED"), config=config)
+
+    assert result["approval_decision"] == "REJECTED"
+    assert result["published_comment_url"] is None
+
+
+def test_human_approval_sets_expiry_when_pausing(tmp_path, monkeypatch):
+    # RF-07.4 (card 16): decide_autonomy grava approval_expires_at antes da
+    # pausa - human_approval so consegue checar TTL porque o valor ja esta
+    # no state congelado pelo checkpointer.
+    _mock_llm(monkeypatch)
+    graph = build_graph(checkpointer=_checkpointer(tmp_path / "checkpoints.db"))
+    state = create_initial_state("Adicionar filtro por data na listagem")
+    config = {"configurable": {"thread_id": state["session_id"]}}
+
+    result = graph.invoke(state, config=config)
+
+    expires_at = result["approval_expires_at"]
+    assert expires_at is not None
+    assert expires_at > datetime.now(timezone.utc)
+
+
+def test_expired_approval_archives_even_when_late_decision_is_approved(tmp_path, monkeypatch):
+    # RF-07.4: uma aprovacao que chega depois do TTL nao publica - o grafo
+    # "retoma e arquiva", mesmo que o valor de resume seja "APPROVED".
+    _mock_llm(monkeypatch)
+    graph = build_graph(checkpointer=_checkpointer(tmp_path / "checkpoints.db"))
+    state = create_initial_state("Adicionar filtro por data na listagem")
+    config = {"configurable": {"thread_id": state["session_id"]}}
+    graph.invoke(state, config=config)
+
+    # Simula o relogio passando do prazo sem esperar de verdade: atualiza o
+    # checkpoint direto, como uma varredura periodica ou um teste de TTL
+    # fariam.
+    graph.update_state(config, {"approval_expires_at": datetime.now(timezone.utc) - timedelta(hours=1)})
+
+    result = graph.invoke(Command(resume="APPROVED"), config=config)
 
     assert result["approval_decision"] == "REJECTED"
     assert result["published_comment_url"] is None

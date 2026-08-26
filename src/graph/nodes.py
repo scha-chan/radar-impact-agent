@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 
 from langgraph.types import interrupt
 
@@ -43,6 +44,7 @@ from src.rag.retriever import retrieve_patterns
 logger = logging.getLogger(__name__)
 
 CONFIDENCE_THRESHOLD = int(os.getenv("CONFIDENCE_THRESHOLD", "70"))
+APPROVAL_TTL_HOURS = int(os.getenv("APPROVAL_TTL_HOURS", "24"))
 
 _SEVERITY_BY_NAME = {s.name: s for s in Severity}
 _PROBABILITY_BY_NAME = {p.name: p for p in Probability}
@@ -202,11 +204,23 @@ def score_risk(state: AgentState) -> dict:
 
 
 def decide_autonomy(state: AgentState) -> dict:
-    """RF-06: decisão determinística de autonomia (node `route_by_confidence`)."""
+    """RF-06: decisão determinística de autonomia (node `route_by_confidence`).
+
+    RF-07.4 (card 16): ao escalar, já grava o prazo de expiração da
+    aprovação (`APPROVAL_TTL_HOURS`, padrão 24h) no state. Isso precisa
+    acontecer aqui, não dentro de `human_approval` — esse node pausa via
+    `interrupt()`, que nunca chega a retornar/persistir nada na primeira
+    passada; `decide_autonomy` roda normalmente antes da pausa, então é o
+    lugar certo para gravar `approval_expires_at` antes do checkpointer
+    congelar o state.
+    """
     requires_review = state["risk_level"] == "CRITICAL" or (
         state["confidence"] or 0
     ) < CONFIDENCE_THRESHOLD
-    return {"human_review_required": requires_review}
+    update: dict = {"human_review_required": requires_review}
+    if requires_review:
+        update["approval_expires_at"] = datetime.now(timezone.utc) + timedelta(hours=APPROVAL_TTL_HOURS)
+    return update
 
 
 def route_after_decision(state: AgentState) -> str:
@@ -233,17 +247,40 @@ def human_approval(state: AgentState) -> dict:
     `approval_decision` ainda está `None` no state (a atualização abaixo
     só é aplicada quando o node retorna). Sem a guarda, todo resume pausaria
     de novo antes de conseguir gravar a decisão.
+
+    RF-07.4 (card 16): a checagem de expiração vem *antes* de chamar
+    `interrupt()`, não depois. Isso importa em duas situações: (1) uma
+    retomada tardia — alguém aprova depois do prazo — cai aqui em vez de
+    chegar ao `interrupt()`, então a decisão de quem aprovou fora do prazo
+    é descartada e o parecer nunca publica; (2) uma varredura periódica
+    (fora do escopo deste card — caberia num scheduler do card 30) pode
+    retomar sessões expiradas com qualquer valor de resume, ou nenhum, para
+    arquivá-las sem publicar.
     """
     if state["approval_decision"] is not None:
         return {}
+    if _is_approval_expired(state):
+        logger.warning(
+            "human_approval_expired",
+            extra={"session_id": state["session_id"], "expires_at": str(state["approval_expires_at"])},
+        )
+        return {"approval_decision": "REJECTED"}
     decision = interrupt(
         {
             "session_id": state["session_id"],
             "risk_level": state["risk_level"],
             "confidence": state["confidence"],
+            "expires_at": state["approval_expires_at"].isoformat()
+            if state["approval_expires_at"]
+            else None,
         }
     )
     return {"approval_decision": decision}
+
+
+def _is_approval_expired(state: AgentState) -> bool:
+    expires_at = state["approval_expires_at"]
+    return expires_at is not None and datetime.now(timezone.utc) >= expires_at
 
 
 def route_after_approval(state: AgentState) -> str:
