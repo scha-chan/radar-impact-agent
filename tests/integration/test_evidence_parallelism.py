@@ -1,11 +1,15 @@
 """RNF-04: a coleta paralela deve ser mensuravelmente mais rápida que a
 sequencial, com evidência registrada.
 
-`retrieve_rag` ainda é stub (card 13) e usa `STUB_IO_LATENCY_SECONDS`.
-`search_codebase` e `fetch_history` já são reais (cards 8-9) — mocamos as
-chamadas de rede subjacentes (`search_code`/`_fetch_history`) com a mesma
-latência simulada, para a comparação continuar válida independente de
-haver ou não `GITHUB_TOKEN` configurado no ambiente de teste.
+Os três nodes de evidência já são reais (cards 8, 9, 13) — mocamos as
+chamadas de rede/embedding subjacentes (`search_code`/`_fetch_history`) com
+latência simulada (`STUB_IO_LATENCY_SECONDS`), para a comparação continuar
+válida independente de haver ou não `GITHUB_TOKEN`/Ollama configurados no
+ambiente de teste. `retrieve_rag` usa `feature_type="outro"` (fixture
+abaixo), que retorna sem tocar o índice vetorial (ver
+`src/rag/retriever.py`) — não soma latência simulada, mas não invalida a
+comparação: o que se mede é o ganho do fan-out sobre os nodes que de fato
+fazem I/O.
 """
 
 import time

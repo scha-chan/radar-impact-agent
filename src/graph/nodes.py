@@ -9,7 +9,7 @@ pronta (card 02).
 
 As integracoes reais chegam nos cards 6-18: extract_requirement (LLM,
 card 6), search_codebase/fetch_history (GitHub API, cards 8-9),
-retrieve_rag (ChromaDB, card 13), analyze_impact (LLM, card 14),
+retrieve_rag (ChromaDB, card 13 — ja real), analyze_impact (LLM, card 14),
 human_approval (interrupt + checkpointer, card 15), publish_comment
 (GitHub API, card 10), guard_adversarial (detector real, card 18).
 """
@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 
 from src.domain.risk import (
     ConfidenceInputs,
@@ -36,6 +35,7 @@ from src.graph.state import AgentState, EvidenceSource, Requirement
 from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
 from src.mcp_server.tools.publish_comment import publish_comment as _publish_comment
 from src.mcp_server.tools.search_code import search_code
+from src.rag.retriever import retrieve_patterns
 
 logger = logging.getLogger(__name__)
 
@@ -99,10 +99,11 @@ def block(state: AgentState) -> dict:
     return {}
 
 
-# Latencia de I/O simulada nos tres nodes de evidencia — existe so para o
-# fan-out via Send (card 05) ser mensuravel antes das integracoes reais
-# (cards 8, 9, 13) terem latencia de rede propria para medir. Remover junto
-# com o ultimo stub que a usa.
+# Latencia de I/O simulada — usada pelos testes de fan-out (card 05,
+# tests/integration/test_evidence_parallelism.py) para simular a rede de
+# search_codebase/fetch_history sem depender de GITHUB_TOKEN configurado.
+# Os tres nodes de evidencia ja sao reais (cards 8, 9, 13); nenhum deles usa
+# esta constante em producao.
 STUB_IO_LATENCY_SECONDS = 0.1
 
 
@@ -129,9 +130,20 @@ def search_codebase(state: AgentState) -> dict:
 
 
 def retrieve_rag(state: AgentState) -> dict:
-    """Stub de RF-03.2: ChromaDB real chega no card 13."""
-    time.sleep(STUB_IO_LATENCY_SECONDS)
-    return {"impact_patterns": []}
+    """RF-03.2: recuperacao semantica real via ChromaDB (`retrieve_patterns`,
+    card 13). RF-03.4: cada padrao recuperado vira uma entrada em
+    `evidence_sources`. Sem `search_terms`, usa o texto bruto do requisito
+    como consulta — ainda ha algo para comparar semanticamente com o corpus,
+    diferente de search_codebase/fetch_history, que dependem de termos
+    exatos para buscar na API do GitHub."""
+    requirement = state["requirement"]
+    if requirement is None:
+        return {"impact_patterns": [], "evidence_sources": []}
+
+    query_text = " ".join(requirement.search_terms) or requirement.text
+    patterns = retrieve_patterns(requirement.feature_type, query_text)
+    evidence = [EvidenceSource(type="rag", ref=pattern.source) for pattern in patterns]
+    return {"impact_patterns": patterns, "evidence_sources": evidence}
 
 
 def fetch_history(state: AgentState) -> dict:
