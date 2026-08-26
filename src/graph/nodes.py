@@ -9,15 +9,18 @@ pronta (card 02).
 
 As integracoes reais chegam nos cards 6-18: extract_requirement (LLM,
 card 6), search_codebase/fetch_history (GitHub API, cards 8-9),
-retrieve_rag (ChromaDB, card 13 — ja real), analyze_impact (LLM, card 14),
-human_approval (interrupt + checkpointer, card 15), publish_comment
-(GitHub API, card 10), guard_adversarial (detector real, card 18).
+retrieve_rag (ChromaDB, card 13 — ja real), analyze_impact (LLM, card 14
+do LLM — ainda pendente), human_approval (interrupt + checkpointer, card
+15 — ja real), publish_comment (GitHub API, card 10), guard_adversarial
+(detector real, card 18).
 """
 
 from __future__ import annotations
 
 import logging
 import os
+
+from langgraph.types import interrupt
 
 from src.domain.risk import (
     ConfidenceInputs,
@@ -211,8 +214,36 @@ def route_after_decision(state: AgentState) -> str:
 
 
 def human_approval(state: AgentState) -> dict:
-    """Stub: `interrupt` real do LangGraph + checkpointer chegam no card 15."""
-    return {}
+    """RF-07.1 (card 15): suspende a execução com `interrupt()` do
+    LangGraph até uma decisão humana chegar (RF-07.2, `POST
+    /approvals/{session_id}` — card 30). `graph.invoke()` retorna de
+    imediato com a chave `"__interrupt__"`; o state fica preservado no
+    checkpointer configurado em `build_graph()` (`SqliteSaver` em produção,
+    `graph/checkpointer.py`) até quem aprovar retomar com
+    `graph.invoke(Command(resume=decisao), config={"configurable":
+    {"thread_id": session_id}})`.
+
+    Guarda contra pausar de novo quando `approval_decision` já veio
+    preenchida no state de entrada — necessário para o grafo ainda rodar
+    numa única chamada sem checkpointer (testes de topologia,
+    `test_graph.py`) simulando um estado já resolvido, e também é o que
+    faz o *resume* funcionar de verdade: após `Command(resume=...)`, o
+    LangGraph reexecuta o node do início, mas `interrupt()` devolve o valor
+    do resume em vez de pausar de novo — só que a essa altura
+    `approval_decision` ainda está `None` no state (a atualização abaixo
+    só é aplicada quando o node retorna). Sem a guarda, todo resume pausaria
+    de novo antes de conseguir gravar a decisão.
+    """
+    if state["approval_decision"] is not None:
+        return {}
+    decision = interrupt(
+        {
+            "session_id": state["session_id"],
+            "risk_level": state["risk_level"],
+            "confidence": state["confidence"],
+        }
+    )
+    return {"approval_decision": decision}
 
 
 def route_after_approval(state: AgentState) -> str:

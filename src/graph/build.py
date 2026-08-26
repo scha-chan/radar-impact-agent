@@ -26,7 +26,14 @@ def _route_after_guard(state: AgentState):
     ]
 
 
-def build_graph():
+def build_graph(checkpointer=None):
+    """`checkpointer` (RF-07.1, card 15): sem ele, `human_approval` ainda
+    consegue pausar (`interrupt()` não exige checkpointer para ser chamado),
+    mas a pausa não sobrevive a uma nova invocação — é o que os testes que
+    pré-preenchem `approval_decision` exploram para rodar o grafo inteiro
+    numa única chamada, sem checkpointer nenhum. Em produção, `api/`
+    (card 30) compila o grafo com `graph.checkpointer.build_checkpointer()`.
+    """
     graph = StateGraph(AgentState)
 
     graph.add_node("extract_requirement", nodes.extract_requirement)
@@ -76,4 +83,4 @@ def build_graph():
     graph.add_edge("publish_comment", END)
     graph.add_edge("archive", END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
