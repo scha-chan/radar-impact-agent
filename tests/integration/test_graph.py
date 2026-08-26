@@ -40,10 +40,13 @@ def test_route_after_guard_fans_out_to_the_three_evidence_nodes():
 
 
 def test_graph_runs_end_to_end_and_escalates_when_evidence_is_empty():
-    # Com os nodes de evidencia ainda stub (listas vazias), a confianca
-    # calculada por score_risk fica abaixo do threshold -> escala para
-    # aprovacao humana. E o comportamento correto e determinístico dado o
-    # estagio atual do grafo (cards 8, 9, 13 ainda nao implementados).
+    # feature_type "outro" (fallback do card 6) nao tem search_terms nem
+    # corpus no RAG -> as tres fontes de evidencia (cards 8, 9, 13, ja
+    # reais) voltam vazias -> confianca abaixo do threshold -> escala para
+    # aprovacao humana. Sem checkpointer, human_approval (card 15) ainda
+    # pausa via interrupt() (nao exige checkpointer para ser chamado), so
+    # que a pausa nao sobrevive a uma nova invocacao - o suficiente para
+    # este teste, que so quer confirmar que o grafo nao publica sozinho.
     graph = build_graph()
     state = create_initial_state("Adicionar filtro por data na listagem")
 
@@ -53,14 +56,18 @@ def test_graph_runs_end_to_end_and_escalates_when_evidence_is_empty():
     assert result["risk_level"] == "LOW"
     assert result["confidence"] is not None
     assert result["human_review_required"] is True
+    assert "__interrupt__" in result
     assert result["published_comment_url"] is None
 
 
 def test_graph_publishes_when_approval_decision_is_already_approved(tmp_path, monkeypatch):
-    # Simula o que o card 15 (interrupt real) vai produzir: o grafo retomado
-    # com approval_decision ja preenchido. Sem issue_number, publish_comment
-    # (card 10) grava em arquivo em vez de chamar a API do GitHub - roda
-    # dentro de tmp_path para nao sujar o repo com audit/dry_run/ real.
+    # Simula o que uma retomada real via Command(resume=...) produz depois
+    # que human_approval (card 15) atualiza approval_decision: aqui,
+    # monta-se o state ja resolvido direto, sem checkpointer nem interrupt
+    # de verdade (isso e coberto por tests/integration/test_human_approval.py).
+    # Sem issue_number, publish_comment (card 10) grava em arquivo em vez de
+    # chamar a API do GitHub - roda dentro de tmp_path para nao sujar o
+    # repo com audit/dry_run/ real.
     monkeypatch.chdir(tmp_path)
     graph = build_graph()
     state = create_initial_state("Adicionar filtro por data na listagem")
