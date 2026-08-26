@@ -234,3 +234,11 @@ print(resultado["requirement"].feature_type, resultado["risk_level"], resultado[
 ```
 
 `extract_requirement` já classifica o requisito de verdade via LLM; os nodes de busca de código, RAG e histórico ainda são stub (listas vazias), então a confiança calculada fica abaixo do threshold padrão (70) e o resultado sempre escala para aprovação humana — comportamento esperado até os cards 8, 9 e 13 substituírem esses stubs por integrações reais.
+
+### Servidor MCP
+
+```bash
+python -m src.mcp_server.server
+```
+
+Sobe o servidor MCP via stdio. Ainda sem tools registradas (chegam nos cards 8-10: `search_code`, `fetch_history`, `publish_comment`) — hoje só serve para confirmar o handshake do protocolo.
