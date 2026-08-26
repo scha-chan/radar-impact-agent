@@ -6,10 +6,22 @@ from src.rag.ingest import get_client, get_or_create_collection, ingest_corpus
 
 class _FakeEmbeddingFunction(EmbeddingFunction):
     """Vetor fixo — só interessa aqui quantos chunks entram na coleção, não
-    a qualidade da recuperação (isso é `test_rag_retriever.py`)."""
+    a qualidade da recuperação (isso é `test_rag_retriever.py`). Implementa
+    `__init__`/`name()` explicitamente — achado do card 26 (análise do log
+    do job "test" da CI): sem isso, o chromadb emite `DeprecationWarning`
+    a cada uso, hoje silenciosa mas anunciada para virar erro."""
+
+    def __init__(self) -> None:
+        pass
 
     def __call__(self, input: Documents) -> Embeddings:  # noqa: A002
         return [[1.0, 0.0] for _ in input]
+
+    def name(self) -> str:
+        return "fake-embedding-function"
+
+    def get_config(self) -> dict:
+        return {}
 
 
 def _build_collection(name: str):

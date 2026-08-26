@@ -34,7 +34,8 @@ def test_publish_comment_writes_dry_run_file(tmp_path):
     )
 
     assert url == f"file://{os.path.join(dry_dir, state['session_id'] + '.md')}"
-    content = open(url.removeprefix("file://"), encoding="utf-8").read()
+    with open(url.removeprefix("file://"), encoding="utf-8") as f:
+        content = f.read()
     assert "LOW" in content
     assert "90" in content
     assert state["session_id"] in content

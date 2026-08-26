@@ -15,25 +15,18 @@ determinístico e documentado dedução por dedução abaixo; o que importa
 para o cenário é ficar abaixo do threshold (70), o que acontece.
 """
 
-import sqlite3
-
-from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from src.graph import nodes
 from src.graph.build import build_graph
 from src.graph.state import PatternChunk, Requirement, Risk, create_initial_state
 from src.observability.audit import read_audit_trail
-from tests.helpers import mock_llm
+from tests.helpers import mock_llm, sqlite_checkpointer
 
 REQUIREMENT_TEXT = (
     "Adicionar autenticação por 2FA (segundo fator) no login para aumentar "
     "a segurança de acesso dos usuários existentes."
 )
-
-
-def _checkpointer(db_path) -> SqliteSaver:
-    return SqliteSaver(sqlite3.connect(db_path, check_same_thread=False))
 
 
 def _mock_evidence_and_analysis(monkeypatch):
@@ -96,7 +89,7 @@ def _mock_evidence_and_analysis(monkeypatch):
 
 def test_scenario_2_high_risk_escalates_and_pauses(tmp_path, monkeypatch):
     _mock_evidence_and_analysis(monkeypatch)
-    graph = build_graph(checkpointer=_checkpointer(tmp_path / "checkpoints.db"))
+    graph = build_graph(checkpointer=sqlite_checkpointer(tmp_path / "checkpoints.db"))
     state = create_initial_state(REQUIREMENT_TEXT)
     config = {"configurable": {"thread_id": state["session_id"]}}
 
@@ -124,7 +117,7 @@ def test_scenario_2_high_risk_escalates_and_pauses(tmp_path, monkeypatch):
 def test_scenario_2_approval_resumes_and_publishes_with_human_review_stamp(tmp_path, monkeypatch):
     _mock_evidence_and_analysis(monkeypatch)
     monkeypatch.chdir(tmp_path)
-    graph = build_graph(checkpointer=_checkpointer(tmp_path / "checkpoints.db"))
+    graph = build_graph(checkpointer=sqlite_checkpointer(tmp_path / "checkpoints.db"))
     state = create_initial_state(REQUIREMENT_TEXT)
     config = {"configurable": {"thread_id": state["session_id"]}}
     graph.invoke(state, config=config)
@@ -152,7 +145,7 @@ def test_scenario_2_approval_resumes_and_publishes_with_human_review_stamp(tmp_p
 
 def test_scenario_2_rejection_resumes_and_archives_without_publishing(tmp_path, monkeypatch):
     _mock_evidence_and_analysis(monkeypatch)
-    graph = build_graph(checkpointer=_checkpointer(tmp_path / "checkpoints.db"))
+    graph = build_graph(checkpointer=sqlite_checkpointer(tmp_path / "checkpoints.db"))
     state = create_initial_state(REQUIREMENT_TEXT)
     config = {"configurable": {"thread_id": state["session_id"]}}
     graph.invoke(state, config=config)

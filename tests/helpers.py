@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
 from unittest.mock import MagicMock
+
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from src.governance.adversarial import AdversarialVerdict
 from src.graph import nodes
@@ -43,3 +46,26 @@ def mock_llm(
     chat_model = MagicMock()
     chat_model.with_structured_output.side_effect = _with_structured_output
     monkeypatch.setattr(nodes, "build_chat_model", lambda **_: chat_model)
+
+
+# Registro de conexões sqlite abertas por `sqlite_checkpointer` — fechadas no
+# teardown por um fixture autouse em `tests/conftest.py`. Achado do card 26
+# (análise do log do job "test" da CI): sem isso, cada execução real do
+# grafo com checkpointer real deixava um `ResourceWarning: unclosed
+# database` nos 46 warnings do relatório do pytest.
+_open_sqlite_connections: list[sqlite3.Connection] = []
+
+
+def sqlite_checkpointer(db_path) -> SqliteSaver:
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    _open_sqlite_connections.append(conn)
+    return SqliteSaver(conn)
+
+
+def close_all_sqlite_connections() -> None:
+    while _open_sqlite_connections:
+        conn = _open_sqlite_connections.pop()
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
