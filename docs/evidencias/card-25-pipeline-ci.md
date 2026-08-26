@@ -10,7 +10,7 @@
   - **test** — `pytest --cov --cov-report=term-missing` (o gate de 70%, card 22, já vem de `pyproject.toml`)
   - **build** — `docker build -t radar:ci .`, depende de lint+test passarem primeiro
   - **secrets-scan** — `gitleaks` via imagem Docker oficial (`zricethezav/gitleaks:latest`), evitando depender de uma action de terceiros no marketplace
-  - Gatilhos: `push` para `develop` e `pull_request` para `main` — exatamente o que a seção 16 do PRD pede.
+  - Gatilhos: `push` para `develop` (o que a seção 16 do PRD pede) e `pull_request` para **`develop` e `main`** — adicionado `develop` porque é para lá que todo PR de feature branch deste projeto aponta (o fluxo real: `feature/*` → PR → `develop`, `develop` → `main` só no card 34 final); restringir a `main` como a seção 16 sugere deixaria a CI muda em 33 dos 34 cards do projeto, sem nunca rodar num PR de verdade até a entrega.
 - `Dockerfile` (novo) — `python:3.12-slim`, instala `requirements.txt`, copia `src/` e `knowledge/`. Sem API ainda (card 30), o entrypoint padrão é o servidor MCP (`python -m src.mcp_server.server`, card 07).
 - `docker-compose.yml` (novo, RNF-06) — um serviço, `.env` carregado via `env_file`, `OLLAMA_BASE_URL` apontando para o host (`host.docker.internal`, já que o Ollama roda fora do container), e um volume único (`radar-data`) para os três caminhos que o app grava (`CHROMA_PERSIST_DIR`, `CHECKPOINT_DB_PATH`, `AUDIT_LOG_PATH`) — sobrescritos via `environment` para caírem todos dentro do volume montado.
 - `.dockerignore` (novo) — exclui `tests/`, `docs/`, `.git/`, dados locais (`chroma/`, `audit/`, `*.db`) do contexto de build.
