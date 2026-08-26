@@ -17,6 +17,7 @@ import os
 from mcp.server.mcpserver import MCPServer
 
 from src import config  # noqa: F401 - carrega .env como efeito colateral do import
+from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
 from src.mcp_server.tools.search_code import search_code as _search_code
 
 SERVER_NAME = "radar-mcp-server"
@@ -31,6 +32,12 @@ def build_server() -> MCPServer:
         """Busca termos no código-fonte de um repositório GitHub; retorna arquivos e trechos."""
         matches = _search_code(search_terms, repo=repo, github_token=os.getenv("GITHUB_TOKEN", ""))
         return [match.model_dump() for match in matches]
+
+    @mcp_server.tool()
+    def fetch_history(search_terms: list[str], repo: str) -> list[dict]:
+        """Busca commits e PRs recentes de um repositório GitHub relacionados aos termos."""
+        entries = _fetch_history(search_terms, repo=repo, github_token=os.getenv("GITHUB_TOKEN", ""))
+        return [entry.model_dump() for entry in entries]
 
     return mcp_server
 

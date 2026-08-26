@@ -1,8 +1,11 @@
 """RNF-04: a coleta paralela deve ser mensuravelmente mais rápida que a
-sequencial, com evidência registrada. Os três nodes de evidência têm uma
-latência de I/O simulada (`nodes.STUB_IO_LATENCY_SECONDS`) só para essa
-comparação ser possível antes das integrações reais (cards 8, 9, 13)
-existirem.
+sequencial, com evidência registrada.
+
+`retrieve_rag` ainda é stub (card 13) e usa `STUB_IO_LATENCY_SECONDS`.
+`search_codebase` e `fetch_history` já são reais (cards 8-9) — mocamos as
+chamadas de rede subjacentes (`search_code`/`_fetch_history`) com a mesma
+latência simulada, para a comparação continuar válida independente de
+haver ou não `GITHUB_TOKEN` configurado no ambiente de teste.
 """
 
 import time
@@ -11,6 +14,11 @@ from unittest.mock import MagicMock
 from src.graph import nodes
 from src.graph.build import build_graph
 from src.graph.state import Requirement, create_initial_state
+
+
+def _fake_io_call(*_args, **_kwargs):
+    time.sleep(nodes.STUB_IO_LATENCY_SECONDS)
+    return []
 
 
 def _run_evidence_nodes_sequentially(state) -> float:
@@ -24,12 +32,23 @@ def _run_evidence_nodes_sequentially(state) -> float:
 def test_send_fan_out_runs_evidence_nodes_concurrently(monkeypatch):
     # extract_requirement chama um LLM real; mockado aqui para o benchmark
     # medir só o fan-out via Send, não latência de rede do Ollama.
-    fake_requirement = Requirement(text="x", feature_type="outro", search_terms=[])
+    fake_requirement = Requirement(
+        text="x", feature_type="outro", search_terms=["termo"]
+    )
     chat_model = MagicMock()
     chat_model.with_structured_output.return_value.invoke.return_value = fake_requirement
     monkeypatch.setattr(nodes, "build_chat_model", lambda **_: chat_model)
 
+    # search_codebase e fetch_history já são reais (cards 8-9); simulamos a
+    # latência de rede deles para o benchmark não depender de GITHUB_TOKEN.
+    monkeypatch.setattr(nodes, "search_code", _fake_io_call)
+    monkeypatch.setattr(nodes, "_fetch_history", _fake_io_call)
+
     state = create_initial_state("Adicionar filtro por data na listagem")
+    # search_codebase/fetch_history só chamam a rede se houver search_terms;
+    # graph.invoke() preenche isso via extract_requirement (mockado acima),
+    # mas a medição sequencial chama os nodes direto, sem passar por ele.
+    state["requirement"] = fake_requirement
 
     sequential_seconds = _run_evidence_nodes_sequentially(state)
 
