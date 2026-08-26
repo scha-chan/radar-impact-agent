@@ -108,19 +108,24 @@ STUB_IO_LATENCY_SECONDS = 0.1
 
 def search_codebase(state: AgentState) -> dict:
     """RF-03.1: busca real via API do GitHub (`search_code`). RF-03.4: cada
-    arquivo encontrado vira uma entrada em `evidence_sources`."""
+    arquivo encontrado vira uma entrada em `evidence_sources`. RF-03.5/
+    cenário 4: se a tool esgotar as tentativas, `tools_failed` registra o
+    fallback para `score_risk` penalizar a confiança."""
     requirement = state["requirement"]
     search_terms = requirement.search_terms if requirement else []
     if not search_terms:
-        return {"code_matches": [], "evidence_sources": []}
+        return {"code_matches": [], "evidence_sources": [], "tools_failed": []}
 
+    failures: list[str] = []
     matches = search_code(
         search_terms,
         repo=os.getenv("GITHUB_REPO", ""),
         github_token=os.getenv("GITHUB_TOKEN", ""),
+        failures=failures,
     )
     evidence = [EvidenceSource(type="code", ref=match.file) for match in matches]
-    return {"code_matches": matches, "evidence_sources": evidence}
+    tools_failed = ["search_code"] if failures else []
+    return {"code_matches": matches, "evidence_sources": evidence, "tools_failed": tools_failed}
 
 
 def retrieve_rag(state: AgentState) -> dict:
@@ -131,19 +136,23 @@ def retrieve_rag(state: AgentState) -> dict:
 
 def fetch_history(state: AgentState) -> dict:
     """RF-03.3: commits e PRs reais via API do GitHub. RF-03.4: cada
-    resultado vira uma entrada em `evidence_sources`."""
+    resultado vira uma entrada em `evidence_sources`. RF-03.5/cenário 4:
+    fallback registrado em `tools_failed`."""
     requirement = state["requirement"]
     search_terms = requirement.search_terms if requirement else []
     if not search_terms:
-        return {"change_history": [], "evidence_sources": []}
+        return {"change_history": [], "evidence_sources": [], "tools_failed": []}
 
+    failures: list[str] = []
     entries = _fetch_history(
         search_terms,
         repo=os.getenv("GITHUB_REPO", ""),
         github_token=os.getenv("GITHUB_TOKEN", ""),
+        failures=failures,
     )
     evidence = [EvidenceSource(type="history", ref=entry.ref) for entry in entries]
-    return {"change_history": entries, "evidence_sources": evidence}
+    tools_failed = ["fetch_history"] if failures else []
+    return {"change_history": entries, "evidence_sources": evidence, "tools_failed": tools_failed}
 
 
 def analyze_impact(state: AgentState) -> dict:
@@ -165,7 +174,7 @@ def score_risk(state: AgentState) -> dict:
         code_matches_found=bool(state["code_matches"]),
         feature_type=feature_type,
         rag_patterns_found=bool(state["impact_patterns"]),
-        tools_failed_with_fallback=0,
+        tools_failed_with_fallback=len(state["tools_failed"]),
         distinct_evidence_sources=len(state["evidence_sources"]),
         risks=risk_items,
     )

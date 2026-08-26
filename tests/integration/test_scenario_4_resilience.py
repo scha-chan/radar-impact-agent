@@ -1,0 +1,79 @@
+"""Cenário 4 do PRD (seção 12) — Falha de integração (resiliência).
+
+Entrada: requisito cujo `search_code` bate numa API do GitHub retornando
+403 (rate limit) de forma consistente. Comportamento esperado: timeout
+respeitado, dois retries com backoff, fallback para análise sem evidência
+de código, dedução de 25 pontos de confiança pela ausência de
+`code_matches` e mais 15 pelo fallback da tool, escalação automática por
+confiança baixa.
+
+Reproduzido pelo grafo real (`build_graph().invoke`), não por chamada
+isolada da tool — para provar que o sinal de falha (`tools_failed`, card
+11) realmente chega em `score_risk` através do fluxo completo.
+"""
+
+import os
+from unittest.mock import MagicMock
+
+import httpx
+import respx
+
+from src.graph import nodes
+from src.graph.build import build_graph
+from src.graph.state import Requirement, create_initial_state
+
+
+@respx.mock
+def test_scenario_4_search_code_rate_limited_escalates_with_documented_deductions(
+    monkeypatch,
+):
+    monkeypatch.setattr("time.sleep", lambda *_: None)  # nao esperar de verdade no teste
+    monkeypatch.setenv("GITHUB_REPO", "owner/repo")
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+
+    # LLM mockado: um unico termo de busca, para contar tentativas com precisao.
+    fake_requirement = Requirement(
+        text="Adicionar filtro por data na listagem de pedidos",
+        feature_type="listagem",
+        search_terms=["pedidos"],
+    )
+    chat_model = MagicMock()
+    chat_model.with_structured_output.return_value.invoke.return_value = fake_requirement
+    monkeypatch.setattr(nodes, "build_chat_model", lambda **_: chat_model)
+
+    # search_code: 403 consistente (rate limit) - RF-03.5 tenta 3x (1 + 2 retries).
+    code_route = respx.get("https://api.github.com/search/code").mock(
+        return_value=httpx.Response(403)
+    )
+    # fetch_history: sem achados, mas sem falhar (nao e o alvo deste cenario).
+    respx.get("https://api.github.com/search/commits").mock(
+        return_value=httpx.Response(200, json={"items": []})
+    )
+    respx.get("https://api.github.com/search/issues").mock(
+        return_value=httpx.Response(200, json={"items": []})
+    )
+
+    graph = build_graph()
+    state = create_initial_state(
+        "Adicionar filtro por data na listagem de pedidos", issue_number=44
+    )
+
+    result = graph.invoke(state)
+
+    # timeout respeitado, dois retries com backoff: 1 tentativa original + 2 retries.
+    assert code_route.call_count == 3
+
+    # fallback para analise sem evidencia de codigo.
+    assert result["code_matches"] == []
+    assert "search_code" in result["tools_failed"]
+
+    # dedução de 25 (sem code_matches) + 15 (tool falhou com fallback) —
+    # mais as deduções já existentes por: requisito com menos de 15 palavras
+    # (-20), ausência de RAG (retrieve_rag é stub, sempre vazio: -20) e
+    # menos de duas fontes de evidência (-10). feature_type "listagem" não
+    # é "outro", então essa dedução não se aplica.
+    assert result["confidence"] == 100 - 20 - 25 - 15 - 20 - 10 == 10
+
+    # escalação automática por confiança baixa.
+    assert result["human_review_required"] is True
+    assert result["published_comment_url"] is None

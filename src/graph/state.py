@@ -138,6 +138,10 @@ class AgentState(TypedDict):
     # chave. code_matches/impact_patterns/change_history nao precisam disso
     # porque cada um e escrito por exatamente um node.
     evidence_sources: Annotated[list[EvidenceSource], operator.add]
+    # Mesmo motivo: search_codebase e fetch_history podem sinalizar falha em
+    # paralelo. Consumido por score_risk (ConfidenceInputs.tools_failed_
+    # with_fallback, secao 11 do PRD) - card 11.
+    tools_failed: Annotated[list[str], operator.add]
 
     # analise
     impacts: list[Impact]
@@ -183,6 +187,7 @@ def create_initial_state(
         impact_patterns=[],
         change_history=[],
         evidence_sources=[],
+        tools_failed=[],
         impacts=[],
         risks=[],
         dependencies=[],

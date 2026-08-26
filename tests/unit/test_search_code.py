@@ -96,3 +96,29 @@ def test_search_code_respects_max_results():
     )
 
     assert len(matches) == 3
+
+
+@respx.mock
+def test_search_code_records_failure_when_term_exhausts_retries(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    respx.get("https://api.github.com/search/code").mock(return_value=httpx.Response(403))
+
+    failures: list[str] = []
+    matches = search_code(
+        ["risk"], repo="owner/repo", github_token="tok", max_retries=2, failures=failures
+    )
+
+    assert matches == []
+    assert failures == ["search_code:risk"]
+
+
+@respx.mock
+def test_search_code_does_not_record_failure_when_term_succeeds_with_no_results():
+    respx.get("https://api.github.com/search/code").mock(
+        return_value=httpx.Response(200, json={"items": []})
+    )
+
+    failures: list[str] = []
+    search_code(["risk"], repo="owner/repo", github_token="tok", failures=failures)
+
+    assert failures == []

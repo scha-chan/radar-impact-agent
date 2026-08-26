@@ -32,7 +32,10 @@ def search_code(
     max_retries: int = 2,
     max_terms: int = 3,
     max_results: int = 10,
+    failures: list[str] | None = None,
 ) -> list[CodeMatch]:
+    """`failures`, se informado, recebe um item por termo cuja busca
+    esgotou as tentativas (card 11 — sinal de fallback para score_risk)."""
     if not repo or not github_token:
         logger.warning(
             "search_code_missing_config",
@@ -57,6 +60,9 @@ def search_code(
                 {"q": f"{term} repo:{repo}", "per_page": 5},
                 max_retries=max_retries,
                 log_context={"tool": "search_code", "term": term},
+                on_exhausted=(lambda t=term: failures.append(f"search_code:{t}"))
+                if failures is not None
+                else None,
             )
             for item in (data or {}).get("items", []):
                 path = item.get("path", "")
