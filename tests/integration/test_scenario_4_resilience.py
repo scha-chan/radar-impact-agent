@@ -10,9 +10,14 @@ confiança baixa.
 Reproduzido pelo grafo real (`build_graph().invoke`), não por chamada
 isolada da tool — para provar que o sinal de falha (`tools_failed`, card
 11) realmente chega em `score_risk` através do fluxo completo.
+
+`retrieve_rag` (card 13) é mockado para retornar vazio: este cenário testa
+especificamente a falha de `search_code`, não a disponibilidade do RAG —
+sem o mock, o resultado dependeria de o Ollama local ter ou não o modelo de
+embedding configurado (`OLLAMA_EMBED_MODEL`), o que tornaria a dedução de
+confiança abaixo não determinística.
 """
 
-import os
 from unittest.mock import MagicMock
 
 import httpx
@@ -30,6 +35,7 @@ def test_scenario_4_search_code_rate_limited_escalates_with_documented_deduction
     monkeypatch.setattr("time.sleep", lambda *_: None)  # nao esperar de verdade no teste
     monkeypatch.setenv("GITHUB_REPO", "owner/repo")
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setattr(nodes, "retrieve_patterns", lambda *_a, **_k: [])
 
     # LLM mockado: um unico termo de busca, para contar tentativas com precisao.
     fake_requirement = Requirement(
@@ -69,7 +75,7 @@ def test_scenario_4_search_code_rate_limited_escalates_with_documented_deduction
 
     # dedução de 25 (sem code_matches) + 15 (tool falhou com fallback) —
     # mais as deduções já existentes por: requisito com menos de 15 palavras
-    # (-20), ausência de RAG (retrieve_rag é stub, sempre vazio: -20) e
+    # (-20), ausência de padrão RAG (mockado para retornar vazio: -20) e
     # menos de duas fontes de evidência (-10). feature_type "listagem" não
     # é "outro", então essa dedução não se aplica.
     assert result["confidence"] == 100 - 20 - 25 - 15 - 20 - 10 == 10
