@@ -17,10 +17,17 @@ from __future__ import annotations
 import httpx
 
 from src import config  # noqa: F401 - carrega .env como efeito colateral do import
+from src.governance.permissions import ToolPermission
 from src.graph.state import HistoryEntry
 from src.mcp_server.tools._http import get_with_retry
 
 GITHUB_API_BASE = "https://api.github.com"
+
+# RF-08.2/card 17: leitura, não destrutiva — mesmo racional de
+# SEARCH_CODE_PERMISSION em search_code.py.
+FETCH_HISTORY_PERMISSION = ToolPermission(
+    name="fetch_history", permission="read:history", destructive=False
+)
 
 
 def fetch_history(
