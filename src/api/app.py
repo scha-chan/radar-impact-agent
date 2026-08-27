@@ -15,6 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 
 from src import config  # noqa: F401 - carrega .env como efeito colateral do import
@@ -43,6 +44,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="RADAR — Agente de Análise de Impacto e Risco", lifespan=lifespan)
+
+# Só o JS compilado (a partir de src/api/static/ts/, ver package.json) é
+# exposto em /static — as fontes TypeScript não precisam ser servidas ao
+# navegador.
+app.mount("/static", StaticFiles(directory=STATIC_DIR / "js"), name="static")
 
 
 def _status_from_result(result: dict) -> AnalysisStatus:

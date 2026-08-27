@@ -1,0 +1,13 @@
+{
+  "name": "radar-impact-agent-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Frontend TypeScript da interface mínima do RADAR (src/api/static) — card 30/interface.",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}
