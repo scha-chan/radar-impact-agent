@@ -23,6 +23,9 @@ class AnalyzeResponse(BaseModel):
     session_id: str
     status: AnalysisStatus
     risk_level: str | None
+    # False quando o parecer escalou sem impacto/risco identificado (card 46):
+    # `risk_level` traz o piso MEDIUM, mas a tela mostra "não avaliado".
+    risk_assessed: bool
     confidence: int | None
     human_review_required: bool
     published_comment_url: str | None
@@ -40,6 +43,9 @@ class PendingApproval(BaseModel):
 
     session_id: str
     risk_level: str | None
+    # False quando a sessão escalou sem avaliação (card 46) — decisão de
+    # auditoria `ESCALATED_NOT_ASSESSED` ou `ESCALATED_BUDGET_EXCEEDED`.
+    risk_assessed: bool
     confidence: int | None
     threshold: int | None
     escalated_at: str

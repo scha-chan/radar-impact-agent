@@ -6,7 +6,7 @@
 
 import { analyzeRequirement, ApiError, getAuditTrail, listPendingApprovals, submitApprovalDecision } from "./api.js";
 import { clear, el, text } from "./dom.js";
-import { formatTimestamp, riskLevelClass, translateDecision, translateRiskLevel } from "./i18n.js";
+import { formatTimestamp, riskDisplayClass, riskDisplayLabel, translateDecision, translateRiskLevel } from "./i18n.js";
 import type { AnalysisStatus, AnalyzeResponse, AuditEntry, PendingApproval } from "./types.js";
 
 const STATUS_STYLES: Record<AnalysisStatus, string> = {
@@ -66,7 +66,9 @@ function renderAnalyzeResult(result: AnalyzeResponse): void {
   const dl = el("dl", { class: "grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm" });
   dl.append(
     el("dt", { class: "font-medium text-stone-500" }, [text("risco")]),
-    el("dd", { class: riskLevelClass(result.risk_level) }, [text(translateRiskLevel(result.risk_level))]),
+    el("dd", { class: riskDisplayClass(result.risk_level, result.risk_assessed) }, [
+      text(riskDisplayLabel(result.risk_level, result.risk_assessed)),
+    ]),
   );
   for (const [label, value] of rows) {
     dl.append(
@@ -139,7 +141,7 @@ function pendingApprovalCard(item: PendingApproval): HTMLDivElement {
   return el("div", { class: "rounded-lg border border-rose-100 bg-white p-4 shadow-sm" }, [
     el("p", { class: "font-mono text-sm text-stone-900" }, [text(item.session_id)]),
     el("p", { class: "mt-1 text-sm text-stone-600" }, [
-      text(`risco: ${translateRiskLevel(item.risk_level)} · confiança: ${item.confidence ?? "—"} (threshold: ${item.threshold ?? "—"})`),
+      text(`risco: ${riskDisplayLabel(item.risk_level, item.risk_assessed)} · confiança: ${item.confidence ?? "—"} (threshold: ${item.threshold ?? "—"})`),
     ]),
     el("p", { class: "mt-1 text-xs text-stone-400" }, [text(`escalado em ${formatTimestamp(item.escalated_at)}`)]),
     el("div", { class: "mt-3 flex gap-2" }, [approveButton, rejectButton]),

@@ -427,9 +427,19 @@ def decide_autonomy(state: AgentState) -> dict:
     `risk_level` mínimo MEDIUM (nunca rebaixa um risco já mais grave) e
     `human_review_required=true`, e a decisão registrada na auditoria é
     `ESCALATED_BUDGET_EXCEEDED`, não `ESCALATED`.
+
+    Card 46: quando o parecer escala mas `analyze_impact` não produziu
+    nenhum impacto nem risco e o risco agregado é baixo — evidência
+    insuficiente, não uma análise que concluiu "risco baixo" —, o mesmo
+    piso MEDIUM é aplicado e `risk_assessed=False` sinaliza para a UI e o
+    comentário mostrarem "não avaliado" em vez de "Baixo". A decisão de
+    auditoria é `ESCALATED_NOT_ASSESSED`.
     """
     budget_exceeded = is_budget_exceeded(state)
-    risk_level = state["risk_level"]
+    original_risk_level = state["risk_level"]
+    risk_level = original_risk_level
+    already_elevated = _RISK_RANK.get(original_risk_level, -1) >= _RISK_RANK["MEDIUM"]
+
     if budget_exceeded and _RISK_RANK.get(risk_level, -1) < _RISK_RANK["MEDIUM"]:
         risk_level = "MEDIUM"
 
@@ -438,17 +448,37 @@ def decide_autonomy(state: AgentState) -> dict:
         or risk_level == "CRITICAL"
         or (state["confidence"] or 0) < CONFIDENCE_THRESHOLD
     )
-    update: dict = {"human_review_required": requires_review}
-    if risk_level != state["risk_level"]:
+
+    # "avaliado" = analyze_impact produziu algo, OU o risco já era >= MEDIUM
+    # (houve sinal), OU nem precisou de revisão (confiança alta é um veredito
+    # real). Caso contrário: escalou sem base — não avaliado.
+    risk_assessed = (
+        bool(state["impacts"] or state["risks"]) or already_elevated or not requires_review
+    )
+    not_assessed_escalation = requires_review and not budget_exceeded and not risk_assessed
+    if not_assessed_escalation and _RISK_RANK.get(risk_level, -1) < _RISK_RANK["MEDIUM"]:
+        risk_level = "MEDIUM"
+
+    update: dict = {
+        "human_review_required": requires_review,
+        "risk_assessed": risk_assessed,
+    }
+    if risk_level != original_risk_level:
         update["risk_level"] = risk_level
     if requires_review:
         update["approval_expires_at"] = datetime.now(timezone.utc) + timedelta(
             hours=APPROVAL_TTL_HOURS
         )
+        if budget_exceeded:
+            decision = "ESCALATED_BUDGET_EXCEEDED"
+        elif not_assessed_escalation:
+            decision = "ESCALATED_NOT_ASSESSED"
+        else:
+            decision = "ESCALATED"
         record_audit(
             AuditRecord(
                 session_id=state["session_id"],
-                decision="ESCALATED_BUDGET_EXCEEDED" if budget_exceeded else "ESCALATED",
+                decision=decision,
                 actor="system",
                 risk_level=risk_level,
                 confidence=state["confidence"],
@@ -549,6 +579,7 @@ def _build_impact_analysis(state: AgentState, requirement_summary: str) -> Impac
         issue_number=state["issue_number"],
         requirement_summary=requirement_summary,
         risk_level=state["risk_level"] or "LOW",
+        risk_assessed=state["risk_assessed"],
         confidence=state["confidence"] if state["confidence"] is not None else 0,
         human_review_required=state["human_review_required"],
         impacts=state["impacts"],

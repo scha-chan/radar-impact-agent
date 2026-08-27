@@ -19,6 +19,17 @@ export function translateRiskLevel(level) {
     return RISK_LEVEL_LABELS[level] ?? level;
 }
 /**
+ * Rótulo de risco para exibição. Quando `assessed` é false (card 46: o
+ * parecer escalou sem impacto/risco identificado), mostra "não avaliado"
+ * em vez do nível — que nesse caso é só o piso MEDIUM, não um risco medido.
+ */
+export function riskDisplayLabel(level, assessed) {
+    return assessed ? translateRiskLevel(level) : "não avaliado";
+}
+export function riskDisplayClass(level, assessed) {
+    return assessed ? riskLevelClass(level) : "font-bold text-stone-500";
+}
+/**
  * Classes Tailwind de feedback visual (cor + negrito) para o nível de
  * risco — usado onde o risco é o dado mais importante da tela (painel de
  * resultado da análise), não nos lugares onde ele é só mais uma coluna

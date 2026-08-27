@@ -16,6 +16,8 @@ export interface AnalyzeResponse {
   session_id: string;
   status: AnalysisStatus;
   risk_level: string | null;
+  /** false → escalou sem avaliação (card 46); a tela mostra "não avaliado". */
+  risk_assessed: boolean;
   confidence: number | null;
   human_review_required: boolean;
   published_comment_url: string | null;
@@ -32,6 +34,8 @@ export interface ApprovalDecisionRequest {
 export interface PendingApproval {
   session_id: string;
   risk_level: string | null;
+  /** false → escalou sem avaliação (card 46). */
+  risk_assessed: boolean;
   confidence: number | null;
   threshold: number | null;
   escalated_at: string;

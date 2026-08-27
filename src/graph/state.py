@@ -154,6 +154,11 @@ class ImpactAnalysis(BaseModel):
     dependencies: list[str] = Field(default_factory=list)
     recommended_tests: list[str] = Field(default_factory=list)
     evidence_sources: list[EvidenceSource] = Field(default_factory=list)
+    # False quando o parecer escalou sem nenhum impacto/risco identificado
+    # (evidencia insuficiente ou orcamento estourado, card 46): `risk_level`
+    # foi elevado ao piso MEDIUM, mas nao e um risco medido — a UI e o
+    # comentario mostram "nao avaliado" em vez do nivel.
+    risk_assessed: bool = True
     generated_at: datetime
 
 
@@ -212,6 +217,9 @@ class AgentState(TypedDict):
 
     # decisao
     risk_level: RiskLevelLiteral | None
+    # False quando escalou sem impacto/risco identificado (card 46) — ver
+    # ImpactAnalysis.risk_assessed. Definido em decide_autonomy.
+    risk_assessed: bool
     confidence: int | None
     human_review_required: bool
     approval_decision: ApprovalDecision | None
@@ -263,6 +271,7 @@ def create_initial_state(
         dependencies=[],
         recommended_tests=[],
         risk_level=None,
+        risk_assessed=True,
         confidence=None,
         human_review_required=False,
         approval_decision=None,

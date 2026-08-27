@@ -68,6 +68,7 @@ def _to_analyze_response(session_id: str, result: dict) -> AnalyzeResponse:
         session_id=session_id,
         status=_status_from_result(result),
         risk_level=result.get("risk_level"),
+        risk_assessed=bool(result.get("risk_assessed", True)),
         confidence=result.get("confidence"),
         human_review_required=bool(result.get("human_review_required")),
         published_comment_url=result.get("published_comment_url"),
@@ -101,6 +102,7 @@ def list_approvals() -> list[PendingApproval]:
         PendingApproval(
             session_id=entry["session_id"],
             risk_level=entry.get("risk_level"),
+            risk_assessed=entry["decision"] == "ESCALATED",
             confidence=entry.get("confidence"),
             threshold=entry.get("threshold"),
             escalated_at=entry["timestamp"],
