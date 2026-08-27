@@ -36,10 +36,17 @@ from src.governance.tool_executor import ToolExecutor
 from src.observability.audit import AuditRecord, record_audit
 from src.graph.budget import elapsed_seconds, is_budget_exceeded
 from src.graph.llm import LLM_MODEL
-from src.graph.state import AgentState, EvidenceSource, ImpactAnalysisResult, Requirement
+from src.graph.state import (
+    AgentState,
+    ComposedReport,
+    EvidenceSource,
+    ImpactAnalysis,
+    ImpactAnalysisResult,
+    Requirement,
+)
 from src.mcp_server.tools.fetch_history import FETCH_HISTORY_PERMISSION
 from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
-from src.mcp_server.tools.publish_comment import PUBLISH_COMMENT_PERMISSION
+from src.mcp_server.tools.publish_comment import PUBLISH_COMMENT_PERMISSION, render_comment
 from src.mcp_server.tools.publish_comment import publish_comment as _publish_comment
 from src.mcp_server.tools.search_code import SEARCH_CODE_PERMISSION, search_code
 from src.rag.retriever import retrieve_patterns
@@ -531,8 +538,83 @@ def route_after_approval(state: AgentState) -> str:
     return "publish_comment" if state["approval_decision"] == "APPROVED" else "archive"
 
 
+def _build_impact_analysis(state: AgentState, requirement_summary: str) -> ImpactAnalysis:
+    """Monta o `ImpactAnalysis` (seção 8 do PRD) a partir do state — puro
+    e determinístico. `risk_level`/`confidence` já foram decididos por
+    `score_risk`/`decide_autonomy`; aqui só são copiados para o objeto de
+    saída (com defaults defensivos para o caminho de orçamento estourado,
+    card 35, que pula `score_risk`)."""
+    return ImpactAnalysis(
+        session_id=state["session_id"],
+        issue_number=state["issue_number"],
+        requirement_summary=requirement_summary,
+        risk_level=state["risk_level"] or "LOW",
+        confidence=state["confidence"] if state["confidence"] is not None else 0,
+        human_review_required=state["human_review_required"],
+        impacts=state["impacts"],
+        risks=state["risks"],
+        dependencies=state["dependencies"],
+        recommended_tests=state["recommended_tests"],
+        evidence_sources=state["evidence_sources"],
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+def _fallback_requirement_summary(state: AgentState) -> str:
+    requirement = state["requirement"]
+    text = (requirement.text if requirement else state["raw_requirement"]).strip()
+    first_line = text.splitlines()[0] if text else ""
+    return first_line[:140].rstrip()
+
+
+def _fallback_executive_summary(analysis: ImpactAnalysis) -> str:
+    review = (
+        "Requer revisão humana antes de qualquer implementação."
+        if analysis.human_review_required
+        else "Publicado automaticamente pelo RADAR."
+    )
+    return (
+        f"Análise concluída com nível de risco {analysis.risk_level} e confiança "
+        f"{analysis.confidence}/100. {len(analysis.impacts)} impacto(s) e "
+        f"{len(analysis.risks)} risco(s) identificados. {review}"
+    )
+
+
+def _compose_report(state: AgentState) -> tuple[ImpactAnalysis, str]:
+    """RF-08 / prompt `04-compose-report` (card 45): monta o `ImpactAnalysis`
+    e redige o texto do parecer.
+
+    Só a redação passa pelo LLM — a condensação do requisito numa linha e o
+    resumo executivo. Os campos estruturados (risco, confiança, impactos,
+    riscos) são copiados do state, nunca reescritos pelo modelo. Falha da
+    chamada → textos de fallback determinísticos e o parecer é publicado
+    mesmo assim (o conteúdo que importa para a decisão já está no objeto).
+    """
+    base_summary = _fallback_requirement_summary(state)
+    analysis = _build_impact_analysis(state, base_summary)
+    exec_fallback = _fallback_executive_summary(analysis)
+
+    try:
+        _set_gen_ai_span_attributes()
+        structured_llm = build_chat_model().with_structured_output(ComposedReport)
+        composed = structured_llm.invoke(prompts.build_compose_report_prompt(analysis))
+    except Exception as exc:  # noqa: BLE001 - degradação: publica com texto de fallback
+        logger.error(
+            "compose_report_failed",
+            extra={"session_id": state["session_id"], "error": str(exc)},
+        )
+        return analysis, exec_fallback
+
+    requirement_summary = (composed.requirement_summary or "").strip() or base_summary
+    executive_summary = (composed.executive_summary or "").strip() or exec_fallback
+    analysis = analysis.model_copy(update={"requirement_summary": requirement_summary})
+    return analysis, executive_summary
+
+
 def publish_comment(state: AgentState) -> dict:
-    """RF-08: publica o parecer (ou grava em arquivo se DRY_RUN/sem Issue).
+    """RF-08: compõe o parecer (`_compose_report`, card 45) e o publica (ou
+    grava em arquivo se DRY_RUN/sem Issue).
+
     Protegido em duas camadas (RF-08.2/RF-08.3, card 17): o `ToolExecutor`
     recusaria a chamada se `publish_comment` não estivesse registrada; a
     própria tool (`mcp_server/tools/publish_comment.py`) chama `authorize()`
@@ -549,6 +631,8 @@ def publish_comment(state: AgentState) -> dict:
     registrado, não silencioso).
     """
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+    analysis, prose = _compose_report(state)
+    body = render_comment(state, analysis=analysis, prose=prose)
     _set_gen_ai_tool_span_attribute("publish_comment")
     try:
         url = _tool_executor.execute(
@@ -559,6 +643,7 @@ def publish_comment(state: AgentState) -> dict:
                 repo=os.getenv("GITHUB_REPO", ""),
                 github_token=os.getenv("GITHUB_TOKEN", ""),
                 dry_run=dry_run,
+                body=body,
             ),
         )
     except PermissionDeniedError as exc:
@@ -571,7 +656,7 @@ def publish_comment(state: AgentState) -> dict:
                 reason=str(exc),
             )
         )
-        return {"published_comment_url": None}
+        return {"analysis": analysis, "published_comment_url": None}
 
     record_audit(
         AuditRecord(
@@ -583,7 +668,7 @@ def publish_comment(state: AgentState) -> dict:
             tool_authorized="publish_comment",
         )
     )
-    return {"published_comment_url": url}
+    return {"analysis": analysis, "published_comment_url": url}
 
 
 def archive(state: AgentState) -> dict:

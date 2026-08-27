@@ -36,7 +36,7 @@ class ApprovalDecisionRequest(BaseModel):
 
 class PendingApproval(BaseModel):
     """RF-10.2: um item do painel de aprovações pendentes — derivado da
-    trilha de auditoria (`list_pending_sessions`, card 20)."""
+    trilha de auditoria (`list_pending_sessions`)."""
 
     session_id: str
     risk_level: str | None
