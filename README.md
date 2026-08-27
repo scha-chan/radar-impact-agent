@@ -155,14 +155,21 @@ sozinho ou se uma ação irreversível é autorizada.
                                                   END
 ```
 
+Na escalação, `decide_autonomy → brief_escalation → human_approval`: o node
+`brief_escalation` (card 49) gera o resumo que o revisor lê no painel.
+`human_approval` tem uma terceira saída (card 47): **reanalisar** volta para
+`analyze_impact` com o contexto que o revisor forneceu, fechando o ciclo
+`analyze → score → decide → brief → human_approval` — limitado por `MAX_REVIEW_ROUNDS`.
+
 **Requisitos de modelagem do fluxo, e onde aparecem:**
 
 | Requisito | Onde está no grafo |
 |---|---|
 | Execução sequencial | `extract → guard → ... → score → route` |
-| Ramificação condicional | `guard_adversarial` e `route_by_confidence` |
+| Ramificação condicional | `guard_adversarial`, `route_by_confidence` e `route_after_approval` (aprovar / rejeitar / reanalisar, card 47) |
 | Paralelização | as três coletas de evidência, via `Send` API do LangGraph |
-| Condição de parada | `retries_left` decrementado a cada falha de tool; `approval_expires_at` no aguardo de aprovação |
+| Ciclo | `human_approval → analyze_impact` na reanálise pedida pelo revisor (card 47) |
+| Condição de parada | `retries_left` a cada falha de tool; `approval_expires_at` no aguardo de aprovação; `MAX_REVIEW_ROUNDS` no ciclo de reanálise; `max_steps` (card 35) como backstop |
 
 Todos os nodes são instrumentados uniformemente com logs estruturados
 (`src/observability/logging.py`, card 19) e decisões de autonomia são
@@ -219,6 +226,10 @@ Três camadas de defesa contra conteúdo externo não confiável (seção 13 do 
 **Permissões de tool** (cards 10/17, [`src/governance/tool_executor.py`](src/governance/tool_executor.py)) — toda tool com efeito externo (`search_code`, `fetch_history`, `publish_comment`) precisa de uma `ToolPermission` registrada; sem ela, a chamada é recusada. `publish_comment` (a única ação irreversível) exige `approval_decision == "APPROVED"` quando `human_review_required` é verdadeiro.
 
 **Escalação humana com expiração** (cards 15/16) — pareceres de baixa confiança pausam via `interrupt()` do LangGraph, preservados no checkpointer; uma aprovação que chega depois do prazo (`APPROVAL_TTL_HOURS`, padrão 24h) é descartada e o grafo arquiva sem publicar.
+
+**Escalação acionável** (card 47) — além de aprovar/rejeitar, o revisor pode **reanalisar**: `POST /approvals/{session_id}` com `{"decision": "REANALYZE", "context": "..."}` injeta o contexto que faltou como evidência e o grafo reexecuta `analyze_impact` (ciclo `analyze → score → decide → human_approval`, limitado por `MAX_REVIEW_ROUNDS`, padrão 3). O contexto passa por `detect_by_pattern` antes de entrar (400 se adversarial). `GET /approvals/{session_id}` devolve o parecer parcial e `gaps` — o que faltou para a análise fechar.
+
+**Resumo para o revisor** (card 49) — ao escalar, o node `brief_escalation` gera um `review_brief` (prompt `05-review-brief`): 2–3 frases sobre o que a mudança pede e por que escalou, mais uma sugestão do que informar numa reanálise. Aparece já em `GET /approvals` (não só no detalhe) e no topo de cada card do painel. Regenerado a cada rodada de reanálise.
 
 **`DRY_RUN`** — com `DRY_RUN=false` (padrão) e um requisito com `issue_number`, `publish_comment` publica de verdade na Issue configurada em `GITHUB_REPO`. Deixe `DRY_RUN=true` para testar sem publicar nada; o comentário é gravado em `audit/dry_run/{session_id}.md`.
 
@@ -287,7 +298,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env` é carregado automaticamente na importação (`src/config.py`) — não precisa exportar as variáveis manualmente no shell. Para a tool `search_code` funcionar (card 08), preencha `GITHUB_TOKEN` com um [personal access token](https://github.com/settings/tokens) com escopo mínimo de leitura de código, e `GITHUB_REPO` com `owner/repo`. Sem essas duas variáveis, `search_codebase` degrada para lista vazia em vez de falhar. Para o LLM, é necessário o Ollama rodando com o modelo configurado em `LLM_MODEL` (padrão `mistral`) baixado:
+`.env` é carregado automaticamente na importação (`src/config.py`) — não precisa exportar as variáveis manualmente no shell. Para a tool `search_code` funcionar (card 08), preencha `GITHUB_TOKEN` com um [personal access token](https://github.com/settings/tokens) com escopo mínimo de leitura de código, e `GITHUB_REPO` com `owner/repo` — este é o **repositório padrão**; a página (`POST /analyze`, campo `repo`, card 43) aceita `owner/repo` ou a URL de outro repositório por análise, para testar fontes diferentes (o `GITHUB_TOKEN` precisa ter acesso a ele). Sem `GITHUB_TOKEN` e sem nenhum repositório, `search_codebase` degrada para lista vazia em vez de falhar. Para o LLM, é necessário o Ollama rodando com o modelo configurado em `LLM_MODEL` (padrão `mistral`) baixado:
 
 ```bash
 ollama serve            # em um terminal separado, se ainda não estiver rodando
@@ -322,7 +333,7 @@ Sobe a API (`http://localhost:8000`) e o n8n (`http://localhost:5678`). O Ollama
 uvicorn src.api.app:app --reload
 ```
 
-Abra `http://localhost:8000` — página única (card 30, RF-10) para submeter um requisito, ver o painel de aprovações pendentes e inspecionar a trilha de auditoria de uma sessão. Endpoints: `POST /analyze` (RF-01.2), `GET /approvals`/`POST /approvals/{session_id}` (RF-07.2), `GET /audit/{session_id}` (RF-09.4). Documentação interativa automática do FastAPI em `/docs`.
+Abra `http://localhost:8000` — página única (card 30, RF-10) para submeter um requisito (com um campo opcional para o repositório do GitHub a analisar, card 43), ver o painel de aprovações pendentes e inspecionar a trilha de auditoria de uma sessão. Endpoints: `POST /analyze` (RF-01.2), `GET /approvals`/`GET`/`POST /approvals/{session_id}` (RF-07.2), `GET /audit/{session_id}` (RF-09.4). Documentação interativa automática do FastAPI em `/docs`.
 
 **Frontend (TypeScript + Tailwind).** A lógica da página (`src/api/static/ts/*.ts` — `types.ts`, `api.ts`, `dom.ts`, `app.ts`) é escrita em TypeScript e compilada para `src/api/static/js/` (servido em `/static`), sem bundler — cada arquivo é um módulo ES nativo carregado pelo navegador. Estilo via Tailwind (CDN, paleta `rose`), sem CSS próprio. Depois de editar um `.ts`:
 
@@ -346,7 +357,7 @@ resultado = graph.invoke(state)
 print(resultado["requirement"].feature_type, resultado["risk_level"], resultado["confidence"])
 ```
 
-Todos os nodes do grafo são reais — `analyze_impact` (card 44) foi o último a sair de stub. Só a composição definitiva do comentário a partir de `ImpactAnalysis` (prompt `04-compose-report`) ainda é provisória (card 45). Sem `GITHUB_TOKEN`/`GITHUB_REPO` configurados, sem o modelo de embedding baixado, sem o Ollama no ar, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado, a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — degradação esperada (seção 11 do PRD), não uma falha.
+Todos os nodes do grafo são reais — `analyze_impact` (card 44) e a composição do parecer final (`ImpactAnalysis` + prompt `04-compose-report`, card 45) foram as últimas peças a sair de stub. Sem `GITHUB_TOKEN`/`GITHUB_REPO` configurados, sem o modelo de embedding baixado, sem o Ollama no ar, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado, a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — degradação esperada (seção 11 do PRD), não uma falha. Quando não chega evidência nenhuma, `analyze_impact` não produz impacto nem risco: o parecer escala como **não avaliado** (`ESCALATED_NOT_ASSESSED`), com `risk_level` no piso `MEDIUM` e a tela/comentário mostrando "não avaliado" em vez de "Baixo" (card 46).
 
 ### Observabilidade: os três sinais e uma investigação real
 
@@ -359,7 +370,7 @@ Toda execução emite três sinais correlacionados pelo mesmo `session_id`/`corr
   configure_structured_logging()
   ```
 
-- **Trilha de auditoria (JSONL)** — um registro por decisão de autonomia (`ESCALATED`, `ESCALATED_BUDGET_EXCEEDED`, `AUTO_PUBLISHED`, `APPROVED_PUBLISHED`, `BLOCKED_ADVERSARIAL`, `REJECTED_ARCHIVED`, `EXPIRED_ARCHIVED`, `PUBLISH_DENIED`), gravado em `AUDIT_LOG_PATH` (padrão `audit/trail.jsonl`). O painel `GET /approvals` da interface mínima deriva desse mesmo arquivo.
+- **Trilha de auditoria (JSONL)** — um registro por decisão de autonomia (`ESCALATED`, `ESCALATED_BUDGET_EXCEEDED`, `ESCALATED_NOT_ASSESSED`, `REANALYSIS_REQUESTED`, `AUTO_PUBLISHED`, `APPROVED_PUBLISHED`, `BLOCKED_ADVERSARIAL`, `REJECTED_ARCHIVED`, `EXPIRED_ARCHIVED`, `PUBLISH_DENIED`), gravado em `AUDIT_LOG_PATH` (padrão `audit/trail.jsonl`). O painel `GET /approvals` da interface mínima deriva desse mesmo arquivo.
 
 - **Trace OpenTelemetry (card 35)** — um span por node (RF-09.2), seguindo as convenções semânticas GenAI (`gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.tool.name`, RF-09.6) nos nodes que chamam LLM ou tool. Todo span carrega `agent.version`/`prompt.version`/`policy.version` fixos (RF-09.5) — sem eles, uma regressão de comportamento não seria rastreável até a versão que a causou. A chamada HTTP de saída das tools (`search_code`/`fetch_history`/`publish_comment`) propaga o contexto do span corrente via W3C Trace Context (header `traceparent`, RF-09.6). Desligado por padrão (`OTEL_CONSOLE_EXPORT=false`); ligar o exporter de console:
 
@@ -434,8 +445,8 @@ Prompts versionados e documentados em [`docs/prompts/`](docs/prompts/): objetivo
 | [`01-extract-requirement.md`](docs/prompts/01-extract-requirement.md) | `extract_requirement` | 06 |
 | [`02-guard-adversarial.md`](docs/prompts/02-guard-adversarial.md) | `guard_adversarial` | 18 |
 | [`03-analyze-impact.md`](docs/prompts/03-analyze-impact.md) | `analyze_impact` | 44 |
-
-`04-compose-report.md` chega com a composição definitiva do parecer a partir de `ImpactAnalysis` (card 45).
+| [`04-compose-report.md`](docs/prompts/04-compose-report.md) | `publish_comment` (`_compose_report`) | 45 |
+| [`05-review-brief.md`](docs/prompts/05-review-brief.md) | `brief_escalation` | 49 |
 
 **Refinamento de prompt (card 32):** análise crítica de um ciclo de refinamento (problema observado, alteração aplicada, resultado antes/depois) — pendente, documentado em `docs/prompts/refinamento.md` quando o card 32 for concluído.
 
@@ -456,7 +467,7 @@ Adaptado da seção 25 do PRD:
 - A probabilidade dos riscos do requisito analisado (RF-05) é estimada pelo LLM, não derivada de dados históricos reais.
 - O dataset de anomalia (card 27) é simulado (50 execuções), por ausência de volume real de produção.
 - Sem controle de acesso — qualquer pessoa com acesso ao painel pode aprovar (RF-10 não inclui autenticação).
-- A composição definitiva do parecer permanece provisória (card 45): `render_comment` monta um corpo markdown mínimo e `state["analysis"]` (`ImpactAnalysis`) nunca é populado — `analyze_impact` já classifica impactos/riscos de verdade (card 44), mas o comentário publicado ainda não os renderiza.
+- O parecer publicado é redigido por um LLM local (`mistral`): a estrutura (risco, confiança, impactos, riscos) é determinística, mas o texto do resumo executivo pode variar em qualidade entre modelos.
 
 **Evolução futura:** análise de dependências via AST para substituir a busca textual; calibração de probabilidade com incidentes reais; autenticação e papéis no fluxo de aprovação; suporte a Jira/Azure DevOps além do GitHub.
 

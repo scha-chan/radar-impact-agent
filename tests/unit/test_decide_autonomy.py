@@ -6,7 +6,7 @@ nada na primeira passada, então não pode ser ele a persistir o prazo).
 from datetime import datetime, timedelta, timezone
 
 from src.graph import nodes
-from src.graph.state import create_initial_state
+from src.graph.state import Impact, Risk, create_initial_state
 
 
 def _state_with(risk_level: str, confidence: int) -> dict:
@@ -50,3 +50,48 @@ def test_decide_autonomy_respects_ttl_env_override(monkeypatch):
 
     delta = result["approval_expires_at"] - datetime.now(timezone.utc)
     assert timedelta(minutes=55) < delta <= timedelta(hours=1)
+
+
+# --- card 46: risco avaliado vs. não avaliado -------------------------------
+
+
+def test_not_assessed_when_escalates_without_impacts_or_risks():
+    result = nodes.decide_autonomy(_state_with("LOW", 10))
+
+    assert result["risk_assessed"] is False
+    assert result["risk_level"] == "MEDIUM"  # piso aplicado
+
+
+def test_assessed_when_a_risk_was_identified():
+    state = _state_with("LOW", 10)
+    state["risks"] = [Risk(description="r", severity="LOW", probability="RARE")]
+
+    result = nodes.decide_autonomy(state)
+
+    assert result["risk_assessed"] is True
+    assert "risk_level" not in result  # LOW real, não é piso
+
+
+def test_assessed_when_only_impacts_were_identified():
+    state = _state_with("LOW", 10)
+    state["impacts"] = [Impact(area="a", description="d", severity="LOW", evidence="x")]
+
+    result = nodes.decide_autonomy(state)
+
+    assert result["risk_assessed"] is True
+
+
+def test_assessed_when_auto_publishing_with_high_confidence():
+    # confiança alta, sem riscos: é um veredito real de "risco baixo",
+    # não uma análise que faltou — a tela mostra "Baixo", não "não avaliado".
+    result = nodes.decide_autonomy(_state_with("LOW", nodes.CONFIDENCE_THRESHOLD))
+
+    assert result["human_review_required"] is False
+    assert result["risk_assessed"] is True
+
+
+def test_not_assessed_never_downgrades_a_risk_already_elevated():
+    result = nodes.decide_autonomy(_state_with("HIGH", 10))
+
+    assert result["risk_assessed"] is True
+    assert "risk_level" not in result

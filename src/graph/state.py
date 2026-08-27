@@ -26,6 +26,11 @@ from src import config  # noqa: F401 - carrega .env como efeito colateral do imp
 MAX_STEPS_DEFAULT = int(os.getenv("MAX_STEPS", "12"))
 MAX_WALL_TIME_SECONDS = int(os.getenv("MAX_WALL_TIME_SECONDS", "60"))
 
+# Card 47: quantas vezes o revisor pode pedir reanálise numa mesma sessão
+# escalada antes de ter que aprovar ou rejeitar. Guardado na rota da API
+# (`submit_approval`); o orçamento de passos (`MAX_STEPS`) é o backstop.
+MAX_REVIEW_ROUNDS = int(os.getenv("MAX_REVIEW_ROUNDS", "3"))
+
 # RF-09.5: versao fixa gravada no state na criacao da execucao — spans,
 # logs e auditoria leem daqui, nao de uma constante global direto, para a
 # versao registrada ser a que estava em vigor quando a execucao comecou
@@ -50,7 +55,7 @@ FeatureType = Literal[
 SeverityLevel = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 ProbabilityLevel = Literal["RARE", "POSSIBLE", "LIKELY", "ALMOST_CERTAIN"]
 RiskLevelLiteral = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
-EvidenceType = Literal["code", "rag", "history"]
+EvidenceType = Literal["code", "rag", "history", "reviewer"]
 ApprovalDecision = Literal["APPROVED", "REJECTED"]
 
 
@@ -127,6 +132,33 @@ class ImpactAnalysisResult(BaseModel):
     recommended_tests: list[str] = Field(default_factory=list)
 
 
+class ReviewBrief(BaseModel):
+    """Saida do LLM em `05-review-brief` (card 49) — o resumo que o revisor
+    le no painel de aprovacoes pendentes.
+
+    `summary`: 2-3 frases (o que a mudanca pede, por que escalou, o que
+    esta incerto). `suggested_context`: 1-2 frases dizendo que informacao
+    destravaria uma reanalise (card 47). O modelo so redige; nao decide
+    nada.
+    """
+
+    summary: str
+    suggested_context: str
+
+
+class ComposedReport(BaseModel):
+    """Saida do LLM em `04-compose-report` (card 45).
+
+    O modelo so redige texto — condensa o requisito numa linha e escreve o
+    resumo executivo. Nao decide nem altera nenhum campo estruturado do
+    `ImpactAnalysis` (risco, confianca, impactos, riscos): esses sao
+    montados deterministicamente e renderizados a partir do objeto.
+    """
+
+    requirement_summary: str
+    executive_summary: str
+
+
 class ImpactAnalysis(BaseModel):
     """Saida principal do RADAR, publicada como comentario na Issue de origem."""
 
@@ -141,6 +173,11 @@ class ImpactAnalysis(BaseModel):
     dependencies: list[str] = Field(default_factory=list)
     recommended_tests: list[str] = Field(default_factory=list)
     evidence_sources: list[EvidenceSource] = Field(default_factory=list)
+    # False quando o parecer escalou sem nenhum impacto/risco identificado
+    # (evidencia insuficiente ou orcamento estourado, card 46): `risk_level`
+    # foi elevado ao piso MEDIUM, mas nao e um risco medido — a UI e o
+    # comentario mostram "nao avaliado" em vez do nivel.
+    risk_assessed: bool = True
     generated_at: datetime
 
 
@@ -169,11 +206,21 @@ class AgentState(TypedDict):
     # entrada
     raw_requirement: str
     requirement: Requirement | None
+    # repositório-alvo desta execução (card 43): `owner/repo`. None -> os
+    # nodes caem no GITHUB_REPO do ambiente. Permite testar fontes diferentes.
+    github_repo: str | None
 
     # controle de fluxo
     is_adversarial: bool
     adversarial_reason: str | None
     retries_left: int
+    # card 47: contexto que o revisor forneceu ao pedir reanálise (uma
+    # entrada por rodada, acumulado); `review_rounds` conta as rodadas;
+    # `reanalysis_requested` diz a `route_after_approval` para voltar a
+    # `analyze_impact` em vez de publicar/arquivar.
+    reviewer_context: list[str]
+    review_rounds: int
+    reanalysis_requested: bool
     approval_expires_at: datetime | None
 
     # evidencia coletada (populada em paralelo)
@@ -199,8 +246,14 @@ class AgentState(TypedDict):
 
     # decisao
     risk_level: RiskLevelLiteral | None
+    # False quando escalou sem impacto/risco identificado (card 46) — ver
+    # ImpactAnalysis.risk_assessed. Definido em decide_autonomy.
+    risk_assessed: bool
     confidence: int | None
     human_review_required: bool
+    # card 49: resumo gerado pela IA (node brief_escalation) do que a
+    # mudanca pede e por que escalou; mostrado no painel de aprovacoes.
+    review_brief: str | None
     approval_decision: ApprovalDecision | None
 
     # saida
@@ -212,6 +265,7 @@ def create_initial_state(
     raw_requirement: str,
     *,
     issue_number: int | None = None,
+    github_repo: str | None = None,
     max_retries: int = 2,
     max_steps: int = MAX_STEPS_DEFAULT,
 ) -> AgentState:
@@ -236,9 +290,13 @@ def create_initial_state(
         started_at=datetime.now(timezone.utc),
         raw_requirement=raw_requirement,
         requirement=None,
+        github_repo=github_repo,
         is_adversarial=False,
         adversarial_reason=None,
         retries_left=max_retries,
+        reviewer_context=[],
+        review_rounds=0,
+        reanalysis_requested=False,
         approval_expires_at=None,
         code_matches=[],
         impact_patterns=[],
@@ -250,8 +308,10 @@ def create_initial_state(
         dependencies=[],
         recommended_tests=[],
         risk_level=None,
+        risk_assessed=True,
         confidence=None,
         human_review_required=False,
+        review_brief=None,
         approval_decision=None,
         analysis=None,
         published_comment_url=None,

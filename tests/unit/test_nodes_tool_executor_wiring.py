@@ -11,6 +11,7 @@ from src.governance.permissions import PermissionDeniedError
 from src.governance.tool_executor import ToolExecutor
 from src.graph import nodes
 from src.graph.state import Requirement, create_initial_state
+from tests.helpers import mock_llm
 
 
 @pytest.fixture
@@ -34,7 +35,8 @@ def test_fetch_history_is_refused_when_tool_is_unregistered(empty_executor):
         nodes.fetch_history(_state_with_search_terms())
 
 
-def test_publish_comment_node_returns_none_when_tool_is_unregistered(empty_executor):
+def test_publish_comment_node_returns_none_when_tool_is_unregistered(empty_executor, monkeypatch):
+    mock_llm(monkeypatch)  # compose_report (card 45) chama o LLM antes da tool
     result = nodes.publish_comment(create_initial_state("x"))
 
-    assert result == {"published_comment_url": None}
+    assert result["published_comment_url"] is None

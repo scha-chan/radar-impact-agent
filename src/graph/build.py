@@ -64,6 +64,7 @@ def build_graph(checkpointer=None):
         "analyze_impact": nodes.analyze_impact,
         "score_risk": nodes.score_risk,
         "decide_autonomy": nodes.decide_autonomy,
+        "brief_escalation": nodes.brief_escalation,
         "human_approval": nodes.human_approval,
         "publish_comment": nodes.publish_comment,
         "archive": nodes.archive,
@@ -99,16 +100,26 @@ def build_graph(checkpointer=None):
     graph.add_edge("analyze_impact", "score_risk")
     graph.add_edge("score_risk", "decide_autonomy")
 
+    # Escala -> brief_escalation (card 49: gera o resumo para o revisor) ->
+    # human_approval. Caminho automático segue direto para publish_comment.
     graph.add_conditional_edges(
         "decide_autonomy",
         nodes.route_after_decision,
-        {"human_approval": "human_approval", "publish_comment": "publish_comment"},
+        {"brief_escalation": "brief_escalation", "publish_comment": "publish_comment"},
     )
+    graph.add_edge("brief_escalation", "human_approval")
 
     graph.add_conditional_edges(
         "human_approval",
         nodes.route_after_approval,
-        {"publish_comment": "publish_comment", "archive": "archive"},
+        {
+            "publish_comment": "publish_comment",
+            "archive": "archive",
+            # card 47: revisor pediu reanálise -> volta ao analyze_impact com
+            # o contexto novo. Ciclo limitado por MAX_REVIEW_ROUNDS (rota da
+            # API) e pelo orçamento de passos (card 35).
+            "analyze_impact": "analyze_impact",
+        },
     )
 
     graph.add_edge("publish_comment", END)

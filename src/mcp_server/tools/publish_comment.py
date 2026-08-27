@@ -20,7 +20,7 @@ import httpx
 
 from src import config  # noqa: F401 - carrega .env como efeito colateral do import
 from src.governance.permissions import ToolPermission, authorize
-from src.graph.state import AgentState
+from src.graph.state import AgentState, ImpactAnalysis
 from src.mcp_server.tools._http import traceparent_headers
 
 logger = logging.getLogger(__name__)
@@ -35,26 +35,96 @@ PUBLISH_COMMENT_PERMISSION = ToolPermission(
 )
 
 
-def render_comment(state: AgentState) -> str:
+def render_comment(
+    state: AgentState,
+    *,
+    analysis: ImpactAnalysis | None = None,
+    prose: str | None = None,
+) -> str:
     """Corpo markdown do parecer.
 
-    Provisório: compõe a partir dos campos já disponíveis no state
-    (risk_level, confidence, requirement). A composição definitiva a
-    partir de `ImpactAnalysis` (prompt `04-compose-report`, seção 18 do
-    PRD) — incluindo impacts/risks/dependencies/recommended_tests, que
-    `analyze_impact` já produz desde o card 44 — é o card 45.
+    Sem `analysis` (chamada direta da tool, fora do grafo): corpo mínimo a
+    partir dos campos do state — mantido para os testes que exercitam a
+    tool isolada. Com `analysis` (caminho normal do grafo, `compose_report`
+    no node `publish_comment`, card 45): parecer completo, com `prose` (o
+    resumo executivo redigido pelo LLM, `04-compose-report`) no topo e as
+    seções estruturadas — impactos, riscos, dependências, testes, evidência
+    — renderizadas deterministicamente a partir do objeto.
     """
-    requirement = state["requirement"]
-    lines = [
-        "## Parecer RADAR",
+    if analysis is None:
+        requirement = state["requirement"]
+        lines = [
+            "## Parecer RADAR",
+            "",
+            f"**Nível de risco:** {state['risk_level']}",
+            f"**Confiança:** {state['confidence']}",
+            f"**Revisão humana necessária:** {'sim' if state['human_review_required'] else 'não'}",
+        ]
+        if requirement is not None:
+            lines += ["", f"**Tipo de feature identificado:** {requirement.feature_type}"]
+        lines += ["", f"_session_id: {state['session_id']}_"]
+        return "\n".join(lines)
+
+    return _render_full_report(analysis, prose)
+
+
+def _render_full_report(analysis: ImpactAnalysis, prose: str | None) -> str:
+    lines = ["## Parecer RADAR", ""]
+    if prose:
+        lines += [prose.strip(), ""]
+    if analysis.risk_assessed:
+        risk_line = f"**Nível de risco:** {analysis.risk_level}"
+    else:
+        risk_line = (
+            f"**Nível de risco:** não avaliado — evidência insuficiente "
+            f"(piso {analysis.risk_level} aplicado)"
+        )
+    lines += [
+        f"**Requisito:** {analysis.requirement_summary}",
+        risk_line,
+        f"**Confiança:** {analysis.confidence}/100",
+        f"**Revisão humana necessária:** {'sim' if analysis.human_review_required else 'não'}",
         "",
-        f"**Nível de risco:** {state['risk_level']}",
-        f"**Confiança:** {state['confidence']}",
-        f"**Revisão humana necessária:** {'sim' if state['human_review_required'] else 'não'}",
+        "### Impactos",
     ]
-    if requirement is not None:
-        lines += ["", f"**Tipo de feature identificado:** {requirement.feature_type}"]
-    lines += ["", f"_session_id: {state['session_id']}_"]
+    if analysis.impacts:
+        lines += [
+            f"- **{i.area}** ({i.severity}): {i.description} — _evidência: {i.evidence}_"
+            for i in analysis.impacts
+        ]
+    else:
+        lines.append("_Nenhum impacto identificado._")
+
+    lines += ["", "### Riscos"]
+    if analysis.risks:
+        for r in analysis.risks:
+            lines.append(f"- ({r.severity}/{r.probability}) {r.description}")
+            lines.append(f"  - Mitigação: {r.mitigation or '—'}")
+    else:
+        lines.append("_Nenhum risco identificado._")
+
+    lines += ["", "### Dependências externas"]
+    lines += (
+        [f"- {d}" for d in analysis.dependencies]
+        if analysis.dependencies
+        else ["_Nenhuma dependência externa identificada._"]
+    )
+
+    lines += ["", "### Testes recomendados"]
+    lines += (
+        [f"- {t}" for t in analysis.recommended_tests]
+        if analysis.recommended_tests
+        else ["_Nenhum teste recomendado._"]
+    )
+
+    lines += ["", "### Evidência"]
+    lines += (
+        [f"- [{e.type}] {e.ref}" for e in analysis.evidence_sources]
+        if analysis.evidence_sources
+        else ["_Sem evidência coletada._"]
+    )
+
+    lines += ["", f"_session_id: {analysis.session_id}_"]
     return "\n".join(lines)
 
 
@@ -66,10 +136,11 @@ def publish_comment(
     dry_run: bool,
     timeout_seconds: float = 10.0,
     dry_run_dir: str = "audit/dry_run",
+    body: str | None = None,
 ) -> str | None:
     authorize(PUBLISH_COMMENT_PERMISSION, state)
 
-    body = render_comment(state)
+    body = body if body is not None else render_comment(state)
     issue_number = state["issue_number"]
 
     if dry_run or issue_number is None:
