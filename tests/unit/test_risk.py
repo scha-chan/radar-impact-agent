@@ -1,3 +1,5 @@
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from src.domain.risk import (
@@ -10,6 +12,34 @@ from src.domain.risk import (
     calculate_confidence,
     classify_risk,
 )
+
+
+# --- valores dos IntEnum (card 37, RNF-10 — mutation testing expôs que os
+# testes acima cobrem comportamento por nome, nunca o valor inteiro
+# subjacente; nada detectava um valor trocado por engano) -----------------
+
+
+def test_severity_values_are_ordered_1_to_4():
+    assert (Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL) == (1, 2, 3, 4)
+
+
+def test_probability_values_are_ordered_1_to_4():
+    assert (
+        Probability.RARE,
+        Probability.POSSIBLE,
+        Probability.LIKELY,
+        Probability.ALMOST_CERTAIN,
+    ) == (1, 2, 3, 4)
+
+
+def test_risk_level_values_are_ordered_1_to_4():
+    assert (RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH, RiskLevel.CRITICAL) == (1, 2, 3, 4)
+
+
+def test_risk_item_is_immutable():
+    item = RiskItem("x", Severity.LOW, Probability.RARE)
+    with pytest.raises(FrozenInstanceError):
+        item.description = "y"
 
 
 # --- classify_risk: matriz completa (PRD secao 11) ---------------------
@@ -78,6 +108,24 @@ def _full_confidence_inputs(**overrides) -> ConfidenceInputs:
     return ConfidenceInputs(**base)
 
 
+def test_confidence_inputs_defaults_when_omitted():
+    # card 37 (RNF-10): os testes acima sempre passam todo campo opcional
+    # explicitamente via _full_confidence_inputs — nada exercitava os
+    # defaults reais da dataclass (tools_failed_with_fallback=0,
+    # distinct_evidence_sources=0, risks=[]).
+    inputs = ConfidenceInputs(
+        requirement_word_count=20,
+        code_matches_found=True,
+        feature_type="login",
+        rag_patterns_found=True,
+    )
+    assert inputs.tools_failed_with_fallback == 0
+    assert inputs.distinct_evidence_sources == 0
+    assert inputs.risks == []
+    # 0 fontes distintas < MIN_DISTINCT_EVIDENCE_SOURCES (2) -> deduz 10.
+    assert calculate_confidence(inputs) == 90
+
+
 def test_confidence_is_100_with_no_deductions():
     assert calculate_confidence(_full_confidence_inputs()) == 100
 
@@ -110,6 +158,20 @@ def test_confidence_deducts_15_per_failed_tool():
 def test_confidence_deducts_10_for_fewer_than_two_sources():
     inputs = _full_confidence_inputs(distinct_evidence_sources=1)
     assert calculate_confidence(inputs) == 90
+
+
+def test_confidence_no_deduction_at_exact_evidence_source_threshold():
+    # card 37 (RNF-10): limite exato (2 fontes) não deduz — só abaixo dele.
+    # Também trava o operador de comparação (`<`, não `<=`).
+    inputs = _full_confidence_inputs(distinct_evidence_sources=2)
+    assert calculate_confidence(inputs) == 100
+
+
+def test_confidence_no_deduction_at_exact_word_threshold():
+    # card 37 (RNF-10): limite exato (15 palavras) não deduz — só abaixo
+    # dele. Também trava o operador de comparação (`<`, não `<=`).
+    inputs = _full_confidence_inputs(requirement_word_count=15)
+    assert calculate_confidence(inputs) == 100
 
 
 def test_confidence_deducts_5_per_risk_without_mitigation():
