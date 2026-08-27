@@ -1,0 +1,9 @@
+# Pesos do score de probabilidade de defeito (RF-12.1) — versionados
+# para a fórmula ser auditável e ajustável sem tocar código. Cada sinal já
+# chega normalizado por percentil ([0, 1]) antes de ser combinado — os
+# pesos abaixo somam 1.0 por convenção, não por exigência do código.
+[probability_weights]
+churn = 0.3
+complexity = 0.3
+authors = 0.2
+coverage_gap = 0.2
