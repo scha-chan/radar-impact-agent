@@ -155,9 +155,11 @@ sozinho ou se uma ação irreversível é autorizada.
                                                   END
 ```
 
+Na escalação, `decide_autonomy → brief_escalation → human_approval`: o node
+`brief_escalation` (card 49) gera o resumo que o revisor lê no painel.
 `human_approval` tem uma terceira saída (card 47): **reanalisar** volta para
 `analyze_impact` com o contexto que o revisor forneceu, fechando o ciclo
-`analyze → score → decide → human_approval` — limitado por `MAX_REVIEW_ROUNDS`.
+`analyze → score → decide → brief → human_approval` — limitado por `MAX_REVIEW_ROUNDS`.
 
 **Requisitos de modelagem do fluxo, e onde aparecem:**
 
@@ -226,6 +228,8 @@ Três camadas de defesa contra conteúdo externo não confiável (seção 13 do 
 **Escalação humana com expiração** (cards 15/16) — pareceres de baixa confiança pausam via `interrupt()` do LangGraph, preservados no checkpointer; uma aprovação que chega depois do prazo (`APPROVAL_TTL_HOURS`, padrão 24h) é descartada e o grafo arquiva sem publicar.
 
 **Escalação acionável** (card 47) — além de aprovar/rejeitar, o revisor pode **reanalisar**: `POST /approvals/{session_id}` com `{"decision": "REANALYZE", "context": "..."}` injeta o contexto que faltou como evidência e o grafo reexecuta `analyze_impact` (ciclo `analyze → score → decide → human_approval`, limitado por `MAX_REVIEW_ROUNDS`, padrão 3). O contexto passa por `detect_by_pattern` antes de entrar (400 se adversarial). `GET /approvals/{session_id}` devolve o parecer parcial e `gaps` — o que faltou para a análise fechar.
+
+**Resumo para o revisor** (card 49) — ao escalar, o node `brief_escalation` gera um `review_brief` (prompt `05-review-brief`): 2–3 frases sobre o que a mudança pede e por que escalou, mais uma sugestão do que informar numa reanálise. Aparece já em `GET /approvals` (não só no detalhe) e no topo de cada card do painel. Regenerado a cada rodada de reanálise.
 
 **`DRY_RUN`** — com `DRY_RUN=false` (padrão) e um requisito com `issue_number`, `publish_comment` publica de verdade na Issue configurada em `GITHUB_REPO`. Deixe `DRY_RUN=true` para testar sem publicar nada; o comentário é gravado em `audit/dry_run/{session_id}.md`.
 
@@ -442,6 +446,7 @@ Prompts versionados e documentados em [`docs/prompts/`](docs/prompts/): objetivo
 | [`02-guard-adversarial.md`](docs/prompts/02-guard-adversarial.md) | `guard_adversarial` | 18 |
 | [`03-analyze-impact.md`](docs/prompts/03-analyze-impact.md) | `analyze_impact` | 44 |
 | [`04-compose-report.md`](docs/prompts/04-compose-report.md) | `publish_comment` (`_compose_report`) | 45 |
+| [`05-review-brief.md`](docs/prompts/05-review-brief.md) | `brief_escalation` | 49 |
 
 **Refinamento de prompt (card 32):** análise crítica de um ciclo de refinamento (problema observado, alteração aplicada, resultado antes/depois) — pendente, documentado em `docs/prompts/refinamento.md` quando o card 32 for concluído.
 

@@ -60,6 +60,7 @@ export interface EscalationDetail {
   confidence: number | null;
   threshold: number | null;
   escalation_reason: string;
+  review_brief: string | null;
   requirement_summary: string | null;
   impacts: Impact[];
   risks: Risk[];
@@ -79,6 +80,8 @@ export interface PendingApproval {
   confidence: number | null;
   threshold: number | null;
   escalated_at: string;
+  /** card 49: resumo gerado pela IA do que a mudança pede e por que escalou. */
+  review_brief: string | null;
 }
 
 export interface AuditEntry {

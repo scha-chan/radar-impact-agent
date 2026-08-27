@@ -33,8 +33,9 @@ from src.graph.llm import build_chat_model
 from src.governance.adversarial import AdversarialVerdict, detect_by_pattern, render_block_message
 from src.governance.permissions import PermissionDeniedError
 from src.governance.tool_executor import ToolExecutor
-from src.observability.audit import AuditRecord, record_audit
+from src.observability.audit import AuditRecord, read_audit_trail, record_audit
 from src.graph.budget import elapsed_seconds, is_budget_exceeded
+from src.graph.escalation import describe_gaps, escalation_reason, last_escalation_decision
 from src.graph.llm import LLM_MODEL
 from src.graph.state import (
     MAX_REVIEW_ROUNDS,
@@ -44,6 +45,7 @@ from src.graph.state import (
     ImpactAnalysis,
     ImpactAnalysisResult,
     Requirement,
+    ReviewBrief,
 )
 from src.mcp_server.tools.fetch_history import FETCH_HISTORY_PERMISSION
 from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
@@ -510,7 +512,70 @@ def decide_autonomy(state: AgentState) -> dict:
 
 
 def route_after_decision(state: AgentState) -> str:
-    return "human_approval" if state["human_review_required"] else "publish_comment"
+    return "brief_escalation" if state["human_review_required"] else "publish_comment"
+
+
+def _fallback_review_brief(state: AgentState, reason: str, gaps: list[str]) -> str:
+    requirement = state["requirement"]
+    what = (
+        requirement.text.strip().splitlines()[0][:140] if requirement else state["raw_requirement"]
+    )
+    missing = " ".join(gaps) if gaps else "Sem lacunas específicas registradas."
+    return (
+        f"Mudança pedida: {what}. Escalou porque {reason} "
+        f"(risco {state['risk_level'] or '—'}, confiança {state['confidence'] if state['confidence'] is not None else '—'}). "
+        f"{missing}\n\n"
+        "O que ajudaria numa reanálise: aponte onde já existe código ou integração "
+        "relacionada, ou peça a reanálise se não houver o que acrescentar."
+    )
+
+
+def brief_escalation(state: AgentState) -> dict:
+    """Card 49: resumo para o revisor — o que a mudança pede, por que
+    escalou e o que ajudaria numa reanálise. Roda entre `decide_autonomy` e
+    `human_approval`, e de novo a cada rodada de reanálise (card 47).
+
+    O LLM só redige (`ReviewBrief`); falha da chamada → texto de fallback
+    determinístico montado dos mesmos dados. Não bloqueia a escalação.
+    """
+    if not state["human_review_required"]:
+        return {}
+
+    last_decision = last_escalation_decision(read_audit_trail(state["session_id"]))
+    reason = escalation_reason(last_decision)
+    gaps = describe_gaps(state, last_decision)
+
+    requirement = state["requirement"]
+    if requirement is None:
+        return {"review_brief": _fallback_review_brief(state, reason, gaps)}
+
+    _set_gen_ai_span_attributes()
+    prompt = prompts.build_review_brief_prompt(
+        requirement,
+        risk_level=state["risk_level"],
+        risk_assessed=state["risk_assessed"],
+        confidence=state["confidence"],
+        threshold=CONFIDENCE_THRESHOLD,
+        reason=reason,
+        impacts=state["impacts"],
+        risks=state["risks"],
+        gaps=gaps,
+    )
+    try:
+        brief = build_chat_model().with_structured_output(ReviewBrief).invoke(prompt)
+    except Exception as exc:  # noqa: BLE001 - degradação: escala com o brief de fallback
+        logger.error(
+            "brief_escalation_failed",
+            extra={"session_id": state["session_id"], "error": str(exc)},
+        )
+        return {"review_brief": _fallback_review_brief(state, reason, gaps)}
+
+    summary = (brief.summary or "").strip() or _fallback_review_brief(state, reason, gaps)
+    suggestion = (brief.suggested_context or "").strip()
+    text = (
+        summary if not suggestion else f"{summary}\n\nO que ajudaria numa reanálise: {suggestion}"
+    )
+    return {"review_brief": text}
 
 
 def human_approval(state: AgentState) -> dict:

@@ -96,7 +96,8 @@ def test_route_after_decision_publishes_without_review():
 def test_route_after_decision_escalates_with_review():
     state = create_initial_state("x")
     state["human_review_required"] = True
-    assert route_after_decision(state) == "human_approval"
+    # card 49: passa por brief_escalation (gera o resumo) antes de human_approval.
+    assert route_after_decision(state) == "brief_escalation"
 
 
 def test_route_after_approval_publishes_when_approved():

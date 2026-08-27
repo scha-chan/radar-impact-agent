@@ -56,6 +56,9 @@ class PendingApproval(BaseModel):
     confidence: int | None
     threshold: int | None
     escalated_at: str
+    # card 49: resumo gerado pela IA — o que a mudança pede, por que escalou
+    # e o que ajudaria numa reanálise. None enquanto o node não rodou.
+    review_brief: str | None = None
 
 
 class EscalationDetail(BaseModel):
@@ -69,6 +72,7 @@ class EscalationDetail(BaseModel):
     confidence: int | None
     threshold: int | None
     escalation_reason: str
+    review_brief: str | None
     requirement_summary: str | None
     impacts: list[Impact]
     risks: list[Risk]

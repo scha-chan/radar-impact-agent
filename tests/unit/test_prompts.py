@@ -108,3 +108,30 @@ def test_compose_prompt_handles_empty_analysis():
     assert "Riscos:\n  (nenhum)" in text
     assert "Dependências externas: (nenhuma)" in text
     assert "Testes recomendados:\n  (nenhum)" in text
+
+
+# --- card 49: build_review_brief_prompt -------------------------------------
+
+
+def test_review_brief_prompt_carries_requirement_reason_and_gaps():
+    req = Requirement(text="Adicionar 2FA no login", feature_type="login", search_terms=["2fa"])
+    text = prompts.build_review_brief_prompt(
+        req,
+        risk_level="MEDIUM",
+        risk_assessed=False,
+        confidence=40,
+        threshold=70,
+        reason="análise não produziu impactos nem riscos",
+        impacts=[],
+        risks=[],
+        gaps=["Nenhuma evidência de código.", "RAG vazio."],
+    )
+
+    assert "Adicionar 2FA no login" in text
+    assert "Motivo da escalação: análise não produziu impactos nem riscos" in text
+    assert "Nível de risco: MEDIUM (não avaliado" in text
+    assert "Confiança: 40/70" in text
+    assert "- Nenhuma evidência de código." in text
+    assert "Impactos identificados:\n  (nenhum)" in text
+    # não deve sugerir dispensar a revisão
+    assert "dispensar" in text.lower() or "não sugira dispensar" in text.lower()
