@@ -457,4 +457,16 @@ Adaptado da seção 25 do PRD:
 - Sem controle de acesso — qualquer pessoa com acesso ao painel pode aprovar (RF-10 não inclui autenticação).
 - `analyze_impact` (classificação real de impactos/riscos por LLM) permanece stub — `impacts`/`risks` ficam vazios em execuções reais até essa peça existir; os cenários 2/3 dos testes mockam essa saída para exercitar o resto do pipeline.
 
-**Evolução futura:** análise de dependências via AST para substituir a busca textual; calibração de probabilidade com incidentes reais; autenticação e papéis no fluxo de aprovação; suporte a Jira/Azure DevOps além do GitHub. Técnicas adicionais ensinadas no módulo (mutation testing, testes por propriedade, avaliação LLM-as-judge, Isolation Forest, classificador calibrado) estão especificadas na seção 21 do PRD (cards 37–41) como extensão pós-rubrica — risco de pendência aceito conscientemente (seção 23 do PRD), não fazem parte dos 34 cards centrais que este README documenta. Orçamento de execução/versionamento em spans (card 35) e score de risco computável para priorização de testes (card 36) — mesma extensão — já foram implementados: ver [Observabilidade](#observabilidade-os-três-sinais-e-uma-investigação-real), [Orçamento de execução](#orçamento-de-execução-rf-065-card-35) acima, e [`docs/evidencias/card-36-score-risco-computavel.md`](docs/evidencias/card-36-score-risco-computavel.md).
+**Evolução futura:** análise de dependências via AST para substituir a busca textual; calibração de probabilidade com incidentes reais; autenticação e papéis no fluxo de aprovação; suporte a Jira/Azure DevOps além do GitHub.
+
+**Extensão pós-rubrica concluída (cards 35–41, seção 21 do PRD):** técnicas adicionais ensinadas no módulo, além do núcleo mínimo de 34 cards que este README documenta — risco de pendência aceito conscientemente na entrega de 31/08 (seção 23 do PRD), mas todas implementadas:
+
+| Card | Técnica | Evidência |
+|---|---|---|
+| 35 | Orçamento de execução (RF-06.5) e versionamento em spans (RF-09.5/09.6) | [Observabilidade](#observabilidade-os-três-sinais-e-uma-investigação-real), [Orçamento de execução](#orçamento-de-execução-rf-065-card-35) acima |
+| 36 | Score de risco computável para priorização de testes (RF-12) | [`docs/evidencias/card-36-score-risco-computavel.md`](docs/evidencias/card-36-score-risco-computavel.md) |
+| 37 | Mutation testing (RNF-10) — score real 66,2% em `src/domain/`+`src/governance/` | [`docs/evidencias/card-37-mutation-testing.md`](docs/evidencias/card-37-mutation-testing.md) |
+| 38 | Testes baseados em propriedade (Hypothesis) | [`docs/evidencias/card-38-testes-propriedade-hypothesis.md`](docs/evidencias/card-38-testes-propriedade-hypothesis.md) |
+| 39 | Golden set e avaliação LLM-as-judge (RF-11) — Kappa real calculado | [`docs/qa/eval-llm-judge.md`](docs/qa/eval-llm-judge.md) |
+| 40 | Detecção de anomalia multivariada (Isolation Forest) | [`docs/devops/anomalias-isolation-forest.md`](docs/devops/anomalias-isolation-forest.md) |
+| 41 | Classificador calibrado de probabilidade de escalação (RNF-11) e action gating | [`docs/devops/action-gating.md`](docs/devops/action-gating.md) |
