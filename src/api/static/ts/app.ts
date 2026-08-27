@@ -4,10 +4,10 @@
  * `dom.ts` (sem `innerHTML` com dado externo — ver `dom.ts`).
  */
 
-import { analyzeRequirement, ApiError, getAuditTrail, listPendingApprovals, submitApprovalDecision } from "./api.js";
+import { analyzeRequirement, ApiError, getAuditTrail, getEscalationDetail, listPendingApprovals, submitApprovalDecision } from "./api.js";
 import { clear, el, text } from "./dom.js";
 import { formatTimestamp, riskDisplayClass, riskDisplayLabel, translateDecision, translateRiskLevel } from "./i18n.js";
-import type { AnalysisStatus, AnalyzeResponse, AuditEntry, PendingApproval } from "./types.js";
+import type { AnalysisStatus, AnalyzeResponse, ApprovalDecision, AuditEntry, EscalationDetail, PendingApproval } from "./types.js";
 
 const STATUS_STYLES: Record<AnalysisStatus, string> = {
   published: "bg-rose-100 text-rose-800 border border-rose-200",
@@ -120,31 +120,134 @@ async function handleAnalyzeSubmit(event: SubmitEvent): Promise<void> {
   }
 }
 
+function bulletList(title: string, items: string[]): HTMLElement {
+  return el("div", { class: "mt-2" }, [
+    el("p", { class: "text-xs font-semibold uppercase tracking-wide text-stone-500" }, [text(title)]),
+    items.length === 0
+      ? el("p", { class: "text-sm text-stone-400" }, [text("—")])
+      : el(
+          "ul",
+          { class: "ml-4 list-disc text-sm text-stone-700" },
+          items.map((line) => el("li", {}, [text(line)])),
+        ),
+  ]);
+}
+
+function renderEscalationDetail(detail: EscalationDetail): HTMLElement {
+  return el("div", { class: "mt-3 rounded-md bg-stone-50 p-3 text-sm" }, [
+    el("p", { class: "text-stone-700" }, [
+      text(`Por que escalou: ${detail.escalation_reason}. Rodadas de reanálise: ${detail.review_rounds}/${detail.max_review_rounds}.`),
+    ]),
+    bulletList("O que faltou", detail.gaps),
+    bulletList(
+      "Impactos",
+      detail.impacts.map((i) => `[${i.severity}] ${i.area}: ${i.description} (evidência: ${i.evidence})`),
+    ),
+    bulletList(
+      "Riscos",
+      detail.risks.map((r) => `[${r.severity}/${r.probability}] ${r.description}${r.mitigation ? ` — mitigação: ${r.mitigation}` : ""}`),
+    ),
+    bulletList("Dependências", detail.dependencies),
+    bulletList("Testes recomendados", detail.recommended_tests),
+    bulletList(
+      "Evidência coletada",
+      detail.evidence_sources.map((e) => `[${e.type}] ${e.ref}`),
+    ),
+  ]);
+}
+
 function pendingApprovalCard(item: PendingApproval): HTMLDivElement {
-  const decide = async (decision: "APPROVED" | "REJECTED"): Promise<void> => {
+  const resultBox = el("p", { class: "mt-3 hidden text-sm" });
+  const detailSlot = el("div", {});
+  const contextInput = el("textarea", {
+    rows: "2",
+    placeholder: "Contexto adicional para reanálise (opcional)",
+    class: "mt-3 w-full rounded-md border border-stone-300 p-2 text-sm focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500",
+  }) as HTMLTextAreaElement;
+
+  const buttons: HTMLButtonElement[] = [];
+  const setBusy = (busy: boolean, active?: HTMLButtonElement, label?: string): void => {
+    for (const b of buttons) b.disabled = busy;
+    contextInput.disabled = busy;
+    if (active && label !== undefined) active.textContent = busy ? "…" : label;
+  };
+  const showResult = (msg: string, ok: boolean): void => {
+    resultBox.className = `mt-3 text-sm ${ok ? "text-emerald-700" : "text-red-700"}`;
+    resultBox.textContent = msg;
+  };
+
+  const act = (button: HTMLButtonElement, label: string, decision: ApprovalDecision) => async (): Promise<void> => {
     hideMessage();
+    showResult("processando…", true);
+    setBusy(true, button, label);
     try {
-      const result = await submitApprovalDecision(item.session_id, decision);
-      showMessage(`Sessão ${result.session_id}: ${STATUS_LABELS[result.status]}.`);
+      const result =
+        decision === "REANALYZE"
+          ? await submitApprovalDecision(item.session_id, decision, contextInput.value)
+          : await submitApprovalDecision(item.session_id, decision);
+      const done =
+        decision === "REANALYZE" && result.status === "pending_approval"
+          ? "Reanálise concluída — parecer atualizado, ainda aguardando decisão."
+          : `Sessão ${result.session_id}: ${STATUS_LABELS[result.status]}.`;
+      // O card some/recarrega no refresh; a mensagem no topo persiste.
+      showResult(done, true);
+      showMessage(done);
+      contextInput.value = "";
+      detailSlot.replaceChildren();
       await refreshApprovals();
     } catch (error) {
-      showMessage(error instanceof ApiError ? error.message : "Erro inesperado ao decidir.", "error");
+      const msg = error instanceof ApiError ? error.message : "Erro inesperado ao decidir.";
+      showResult(msg, false);
+      showMessage(msg, "error");
+      if (error instanceof ApiError && error.status === 404) await refreshApprovals();
+    } finally {
+      setBusy(false, button, label);
     }
   };
 
-  const approveButton = el("button", { type: "button", class: "rounded-md bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700" }, [text("Aprovar")]);
-  approveButton.addEventListener("click", () => void decide("APPROVED"));
+  const mkButton = (label: string, cls: string, decision: ApprovalDecision): HTMLButtonElement => {
+    const b = el("button", { type: "button", class: cls }, [text(label)]) as HTMLButtonElement;
+    b.addEventListener("click", () => void act(b, label, decision)());
+    buttons.push(b);
+    return b;
+  };
 
-  const rejectButton = el("button", { type: "button", class: "rounded-md bg-stone-200 px-3 py-1.5 text-sm font-medium text-stone-800 hover:bg-stone-300" }, [text("Rejeitar")]);
-  rejectButton.addEventListener("click", () => void decide("REJECTED"));
+  const approveButton = mkButton("Aprovar", "rounded-md bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50", "APPROVED");
+  const rejectButton = mkButton("Rejeitar", "rounded-md bg-stone-200 px-3 py-1.5 text-sm font-medium text-stone-800 hover:bg-stone-300 disabled:opacity-50", "REJECTED");
+  const reanalyzeButton = mkButton("Reanalisar", "rounded-md border border-rose-300 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50", "REANALYZE");
+
+  const detailButton = el("button", { type: "button", class: "text-xs text-rose-700 underline disabled:opacity-50" }, [text("Ver detalhe")]) as HTMLButtonElement;
+  detailButton.addEventListener("click", () => {
+    void (async (): Promise<void> => {
+      if (detailSlot.childElementCount > 0) {
+        detailSlot.replaceChildren();
+        return;
+      }
+      detailButton.disabled = true;
+      try {
+        const detail = await getEscalationDetail(item.session_id);
+        detailSlot.replaceChildren(renderEscalationDetail(detail));
+      } catch (error) {
+        showResult(error instanceof ApiError ? error.message : "Erro ao carregar detalhe.", false);
+      } finally {
+        detailButton.disabled = false;
+      }
+    })();
+  });
 
   return el("div", { class: "rounded-lg border border-rose-100 bg-white p-4 shadow-sm" }, [
-    el("p", { class: "font-mono text-sm text-stone-900" }, [text(item.session_id)]),
+    el("div", { class: "flex items-center justify-between" }, [
+      el("p", { class: "font-mono text-sm text-stone-900" }, [text(item.session_id)]),
+      detailButton,
+    ]),
     el("p", { class: "mt-1 text-sm text-stone-600" }, [
       text(`risco: ${riskDisplayLabel(item.risk_level, item.risk_assessed)} · confiança: ${item.confidence ?? "—"} (threshold: ${item.threshold ?? "—"})`),
     ]),
     el("p", { class: "mt-1 text-xs text-stone-400" }, [text(`escalado em ${formatTimestamp(item.escalated_at)}`)]),
-    el("div", { class: "mt-3 flex gap-2" }, [approveButton, rejectButton]),
+    detailSlot,
+    contextInput,
+    el("div", { class: "mt-3 flex gap-2" }, [approveButton, rejectButton, reanalyzeButton]),
+    resultBox,
   ]);
 }
 

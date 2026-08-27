@@ -25,11 +25,13 @@ from src.api.schemas import (
     AnalyzeResponse,
     ApprovalDecisionRequest,
     AuditEntry,
+    EscalationDetail,
     PendingApproval,
 )
+from src.governance.adversarial import detect_by_pattern
 from src.graph.build import build_graph
 from src.graph.checkpointer import build_checkpointer
-from src.graph.state import AgentState, create_initial_state
+from src.graph.state import MAX_REVIEW_ROUNDS, AgentState, create_initial_state
 from src.observability.audit import list_pending_sessions, read_audit_trail
 from src.observability.tracing import configure_tracing
 
@@ -111,13 +113,14 @@ def list_approvals() -> list[PendingApproval]:
     ]
 
 
-@app.post("/approvals/{session_id}", response_model=AnalyzeResponse)
-def submit_approval(session_id: str, request: ApprovalDecisionRequest) -> AnalyzeResponse:
-    """RF-07.2: aprova ou rejeita uma sessão pausada em `human_approval`.
-    404 se a sessão não existe ou já não está mais aguardando aprovação —
-    `graph.get_state` devolve `next=()` nos dois casos (thread desconhecida
-    ou já resolvida), então não dá para distinguir um do outro sem
-    consultar a trilha de auditoria; a mensagem de erro reflete isso."""
+_ESCALATION_REASONS = {
+    "ESCALATED": "confiança abaixo do threshold ou risco crítico",
+    "ESCALATED_BUDGET_EXCEEDED": "orçamento de execução estourado",
+    "ESCALATED_NOT_ASSESSED": "análise não produziu impactos nem riscos (evidência insuficiente)",
+}
+
+
+def _pending_snapshot_or_404(session_id: str):
     config_dict = {"configurable": {"thread_id": session_id}}
     snapshot = app.state.graph.get_state(config_dict)
     if snapshot.next != ("human_approval",):
@@ -125,8 +128,81 @@ def submit_approval(session_id: str, request: ApprovalDecisionRequest) -> Analyz
             status_code=404,
             detail=f"sessão {session_id!r} não encontrada ou não está aguardando aprovação",
         )
+    return config_dict, snapshot
 
-    result = app.state.graph.invoke(Command(resume=request.decision), config=config_dict)
+
+def _derive_gaps(values: dict, last_decision: str | None) -> list[str]:
+    gaps: list[str] = []
+    if not values.get("code_matches"):
+        gaps.append("Nenhuma evidência de código (busca no repositório vazia).")
+    if not values.get("impact_patterns"):
+        gaps.append("Nenhum padrão de impacto recuperado do RAG.")
+    if not values.get("change_history"):
+        gaps.append("Nenhum histórico de mudanças relacionado.")
+    if values.get("tools_failed"):
+        gaps.append(f"Ferramentas com falha: {', '.join(values['tools_failed'])}.")
+    if last_decision == "ESCALATED_BUDGET_EXCEEDED":
+        gaps.append("Orçamento de execução estourado antes de a análise concluir.")
+    if last_decision == "ESCALATED_NOT_ASSESSED":
+        gaps.append("A análise não classificou nenhum impacto ou risco.")
+    return gaps
+
+
+@app.get("/approvals/{session_id}", response_model=EscalationDetail)
+def get_escalation_detail(session_id: str) -> EscalationDetail:
+    """Card 47: o parecer parcial de uma sessão escalada + `gaps` (o que
+    faltou). Lê o `AgentState` congelado no checkpointer."""
+    _config_dict, snapshot = _pending_snapshot_or_404(session_id)
+    values = snapshot.values
+    entries = read_audit_trail(session_id)
+    escalations = [e for e in entries if e["decision"] in _ESCALATION_REASONS]
+    last_decision = escalations[-1]["decision"] if escalations else None
+    requirement = values.get("requirement")
+    return EscalationDetail(
+        session_id=session_id,
+        risk_level=values.get("risk_level"),
+        risk_assessed=bool(values.get("risk_assessed", True)),
+        confidence=values.get("confidence"),
+        threshold=escalations[-1].get("threshold") if escalations else None,
+        escalation_reason=_ESCALATION_REASONS.get(last_decision, "escalado para revisão humana"),
+        requirement_summary=requirement.text if requirement else None,
+        impacts=values.get("impacts", []),
+        risks=values.get("risks", []),
+        dependencies=values.get("dependencies", []),
+        recommended_tests=values.get("recommended_tests", []),
+        evidence_sources=values.get("evidence_sources", []),
+        gaps=_derive_gaps(values, last_decision),
+        review_rounds=values.get("review_rounds", 0),
+        max_review_rounds=MAX_REVIEW_ROUNDS,
+    )
+
+
+@app.post("/approvals/{session_id}", response_model=AnalyzeResponse)
+def submit_approval(session_id: str, request: ApprovalDecisionRequest) -> AnalyzeResponse:
+    """RF-07.2: aprova, rejeita ou pede reanálise (card 47) de uma sessão
+    pausada em `human_approval`. 404 se a sessão não existe ou já não está
+    mais aguardando aprovação — `graph.get_state` devolve `next=()` nos dois
+    casos (thread desconhecida ou já resolvida)."""
+    config_dict, snapshot = _pending_snapshot_or_404(session_id)
+
+    if request.decision == "REANALYZE":
+        context = (request.context or "").strip()
+        check = detect_by_pattern(context)
+        if check.is_adversarial:
+            raise HTTPException(
+                status_code=400,
+                detail=f"contexto recusado: parece conter instrução dirigida ao agente ({check.reason})",
+            )
+        if snapshot.values.get("review_rounds", 0) >= MAX_REVIEW_ROUNDS:
+            raise HTTPException(
+                status_code=409,
+                detail=f"limite de {MAX_REVIEW_ROUNDS} reanálises atingido; aprove ou rejeite",
+            )
+        resume: object = {"action": "REANALYZE", "context": context or None}
+    else:
+        resume = request.decision
+
+    result = app.state.graph.invoke(Command(resume=resume), config=config_dict)
 
     return _to_analyze_response(session_id, result)
 

@@ -9,6 +9,7 @@ import type {
   AnalyzeResponse,
   ApprovalDecision,
   AuditEntry,
+  EscalationDetail,
   PendingApproval,
 } from "./types.js";
 
@@ -58,11 +59,16 @@ export function listPendingApprovals(): Promise<PendingApproval[]> {
 export function submitApprovalDecision(
   sessionId: string,
   decision: ApprovalDecision,
+  context?: string,
 ): Promise<AnalyzeResponse> {
   return request<AnalyzeResponse>(`/approvals/${encodeURIComponent(sessionId)}`, {
     method: "POST",
-    body: JSON.stringify({ decision }),
+    body: JSON.stringify(context !== undefined ? { decision, context } : { decision }),
   });
+}
+
+export function getEscalationDetail(sessionId: string): Promise<EscalationDetail> {
+  return request<EscalationDetail>(`/approvals/${encodeURIComponent(sessionId)}`);
 }
 
 export function getAuditTrail(sessionId: string): Promise<AuditEntry[]> {

@@ -26,6 +26,11 @@ from src import config  # noqa: F401 - carrega .env como efeito colateral do imp
 MAX_STEPS_DEFAULT = int(os.getenv("MAX_STEPS", "12"))
 MAX_WALL_TIME_SECONDS = int(os.getenv("MAX_WALL_TIME_SECONDS", "60"))
 
+# Card 47: quantas vezes o revisor pode pedir reanálise numa mesma sessão
+# escalada antes de ter que aprovar ou rejeitar. Guardado na rota da API
+# (`submit_approval`); o orçamento de passos (`MAX_STEPS`) é o backstop.
+MAX_REVIEW_ROUNDS = int(os.getenv("MAX_REVIEW_ROUNDS", "3"))
+
 # RF-09.5: versao fixa gravada no state na criacao da execucao — spans,
 # logs e auditoria leem daqui, nao de uma constante global direto, para a
 # versao registrada ser a que estava em vigor quando a execucao comecou
@@ -50,7 +55,7 @@ FeatureType = Literal[
 SeverityLevel = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 ProbabilityLevel = Literal["RARE", "POSSIBLE", "LIKELY", "ALMOST_CERTAIN"]
 RiskLevelLiteral = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
-EvidenceType = Literal["code", "rag", "history"]
+EvidenceType = Literal["code", "rag", "history", "reviewer"]
 ApprovalDecision = Literal["APPROVED", "REJECTED"]
 
 
@@ -192,6 +197,13 @@ class AgentState(TypedDict):
     is_adversarial: bool
     adversarial_reason: str | None
     retries_left: int
+    # card 47: contexto que o revisor forneceu ao pedir reanálise (uma
+    # entrada por rodada, acumulado); `review_rounds` conta as rodadas;
+    # `reanalysis_requested` diz a `route_after_approval` para voltar a
+    # `analyze_impact` em vez de publicar/arquivar.
+    reviewer_context: list[str]
+    review_rounds: int
+    reanalysis_requested: bool
     approval_expires_at: datetime | None
 
     # evidencia coletada (populada em paralelo)
@@ -260,6 +272,9 @@ def create_initial_state(
         is_adversarial=False,
         adversarial_reason=None,
         retries_left=max_retries,
+        reviewer_context=[],
+        review_rounds=0,
+        reanalysis_requested=False,
         approval_expires_at=None,
         code_matches=[],
         impact_patterns=[],

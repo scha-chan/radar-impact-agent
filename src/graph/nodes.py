@@ -37,6 +37,7 @@ from src.observability.audit import AuditRecord, record_audit
 from src.graph.budget import elapsed_seconds, is_budget_exceeded
 from src.graph.llm import LLM_MODEL
 from src.graph.state import (
+    MAX_REVIEW_ROUNDS,
     AgentState,
     ComposedReport,
     EvidenceSource,
@@ -310,6 +311,8 @@ def _known_evidence_refs(state: AgentState) -> set[str]:
         refs.add(entry.ref)
     for source in state["evidence_sources"]:
         refs.add(source.ref)
+    if state["reviewer_context"]:
+        refs.add("revisor")  # card 47: impacto pode se apoiar no contexto do revisor
     return {ref for ref in refs if ref}
 
 
@@ -334,6 +337,10 @@ def analyze_impact(state: AgentState) -> dict:
     sustentar. Caso contrário, impactos cujo campo `evidence` não referencia
     nenhuma fonte coletada são descartados (com log), nunca publicados.
 
+    Card 47: numa reanálise pedida pelo revisor, `reviewer_context` entra
+    no prompt como mais uma fonte de evidência (já registrado em
+    `evidence_sources` por `human_approval`).
+
     Tratamento de falha (mesma filosofia de `extract_requirement`/
     `guard_adversarial`): erro de chamada ou de parse do LLM → listas
     vazias e log; o grafo continua e `score_risk` penaliza a confiança do
@@ -349,6 +356,7 @@ def analyze_impact(state: AgentState) -> dict:
         state["code_matches"],
         state["impact_patterns"],
         state["change_history"],
+        state["reviewer_context"],
     )
     try:
         structured_llm = build_chat_model().with_structured_output(ImpactAnalysisResult)
@@ -534,6 +542,14 @@ def human_approval(state: AgentState) -> dict:
     (fora do escopo deste card — caberia num scheduler do card 30) pode
     retomar sessões expiradas com qualquer valor de resume, ou nenhum, para
     arquivá-las sem publicar.
+
+    Card 47: o valor de resume pode ser um `dict`
+    `{"action": "REANALYZE", "context": str|None}` além das strings
+    `"APPROVED"`/`"REJECTED"`. Numa reanálise, o node não resolve a
+    aprovação — injeta o contexto do revisor como evidência, incrementa
+    `review_rounds`, e `route_after_approval` volta o grafo para
+    `analyze_impact`. O teto de rodadas é aplicado na rota da API
+    (`submit_approval`), não aqui.
     """
     if state["approval_decision"] is not None:
         return {}
@@ -546,17 +562,75 @@ def human_approval(state: AgentState) -> dict:
             },
         )
         return {"approval_decision": "REJECTED"}
-    decision = interrupt(
+    resumed = interrupt(
         {
             "session_id": state["session_id"],
             "risk_level": state["risk_level"],
             "confidence": state["confidence"],
+            "review_rounds": state["review_rounds"],
+            "max_review_rounds": MAX_REVIEW_ROUNDS,
             "expires_at": state["approval_expires_at"].isoformat()
             if state["approval_expires_at"]
             else None,
         }
     )
-    return {"approval_decision": decision}
+
+    action, context = _parse_review_action(resumed)
+    if action == "REANALYZE":
+        return _request_reanalysis(state, context)
+    return {"approval_decision": action, "reanalysis_requested": False}
+
+
+def _parse_review_action(resumed) -> tuple[str, str | None]:
+    """O resume pode ser a string `"APPROVED"`/`"REJECTED"` (compat, o que
+    a rota manda para aprovar/rejeitar) ou o dict do card 47
+    `{"action": "REANALYZE", "context": ...}`."""
+    if isinstance(resumed, dict):
+        return resumed.get("action", "REJECTED"), resumed.get("context")
+    return resumed, None
+
+
+# Passos que uma rodada de reanálise adiciona (analyze_impact + score_risk +
+# decide_autonomy + human_approval, com margem). O orçamento de execução
+# (card 35) é estendido por rodada para a reanálise não estourar sozinha —
+# o teto real das rodadas é MAX_REVIEW_ROUNDS, aplicado na rota da API.
+_STEPS_PER_REANALYSIS = 6
+
+
+def _request_reanalysis(state: AgentState, context: str | None) -> dict:
+    round_number = state["review_rounds"] + 1
+    ctx = (context or "").strip()
+    update: dict = {
+        "approval_decision": None,
+        "human_review_required": False,
+        "reanalysis_requested": True,
+        "review_rounds": round_number,
+        "max_steps": state["max_steps"] + _STEPS_PER_REANALYSIS,
+    }
+    if ctx:
+        update["reviewer_context"] = state["reviewer_context"] + [ctx]
+        update["evidence_sources"] = [
+            EvidenceSource(type="reviewer", ref=f"revisor#{round_number}")
+        ]
+    logger.info(
+        "reanalysis_requested",
+        extra={
+            "session_id": state["session_id"],
+            "review_round": round_number,
+            "has_context": bool(ctx),
+        },
+    )
+    record_audit(
+        AuditRecord(
+            session_id=state["session_id"],
+            decision="REANALYSIS_REQUESTED",
+            actor="human",
+            risk_level=state["risk_level"],
+            confidence=state["confidence"],
+            reason=(ctx[:200] or "reanálise sem contexto adicional"),
+        )
+    )
+    return update
 
 
 def _is_approval_expired(state: AgentState) -> bool:
@@ -565,7 +639,11 @@ def _is_approval_expired(state: AgentState) -> bool:
 
 
 def route_after_approval(state: AgentState) -> str:
-    return "publish_comment" if state["approval_decision"] == "APPROVED" else "archive"
+    if state["approval_decision"] == "APPROVED":
+        return "publish_comment"
+    if state["reanalysis_requested"]:
+        return "analyze_impact"  # card 47: revisor pediu reanálise com contexto novo
+    return "archive"
 
 
 def _build_impact_analysis(state: AgentState, requirement_summary: str) -> ImpactAnalysis:

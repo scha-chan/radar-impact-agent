@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from src.graph.state import EvidenceSource, Impact, Risk
+
 AnalysisStatus = Literal["published", "blocked", "pending_approval", "archived"]
 
 
@@ -34,7 +36,12 @@ class AnalyzeResponse(BaseModel):
 
 
 class ApprovalDecisionRequest(BaseModel):
-    decision: Literal["APPROVED", "REJECTED"]
+    """RF-07.2. `REANALYZE` (card 47): em vez de encerrar, o revisor manda
+    o grafo reanalisar — `context` (opcional) é o que faltou, entra como
+    evidência na nova rodada de `analyze_impact`."""
+
+    decision: Literal["APPROVED", "REJECTED", "REANALYZE"]
+    context: str | None = Field(default=None, max_length=8000)
 
 
 class PendingApproval(BaseModel):
@@ -49,6 +56,28 @@ class PendingApproval(BaseModel):
     confidence: int | None
     threshold: int | None
     escalated_at: str
+
+
+class EscalationDetail(BaseModel):
+    """Card 47: o "retorno" completo de uma sessão escalada, para o painel
+    de detalhe — o parecer parcial (do state congelado no checkpointer) e
+    `gaps`, o que faltou para a análise fechar."""
+
+    session_id: str
+    risk_level: str | None
+    risk_assessed: bool
+    confidence: int | None
+    threshold: int | None
+    escalation_reason: str
+    requirement_summary: str | None
+    impacts: list[Impact]
+    risks: list[Risk]
+    dependencies: list[str]
+    recommended_tests: list[str]
+    evidence_sources: list[EvidenceSource]
+    gaps: list[str]
+    review_rounds: int
+    max_review_rounds: int
 
 
 class AuditEntry(BaseModel):
