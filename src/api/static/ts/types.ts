@@ -25,10 +25,50 @@ export interface AnalyzeResponse {
   adversarial_reason: string | null;
 }
 
-export type ApprovalDecision = "APPROVED" | "REJECTED";
+export type ApprovalDecision = "APPROVED" | "REJECTED" | "REANALYZE";
 
 export interface ApprovalDecisionRequest {
   decision: ApprovalDecision;
+  /** card 47: contexto que faltou, para a reanálise (só com REANALYZE). */
+  context?: string | null;
+}
+
+export interface EvidenceSource {
+  type: "code" | "rag" | "history" | "reviewer";
+  ref: string;
+}
+
+export interface Impact {
+  area: string;
+  description: string;
+  severity: string;
+  evidence: string;
+}
+
+export interface Risk {
+  description: string;
+  severity: string;
+  probability: string;
+  mitigation: string | null;
+}
+
+/** card 47: parecer parcial + o que faltou, para o painel de detalhe. */
+export interface EscalationDetail {
+  session_id: string;
+  risk_level: string | null;
+  risk_assessed: boolean;
+  confidence: number | null;
+  threshold: number | null;
+  escalation_reason: string;
+  requirement_summary: string | null;
+  impacts: Impact[];
+  risks: Risk[];
+  dependencies: string[];
+  recommended_tests: string[];
+  evidence_sources: EvidenceSource[];
+  gaps: string[];
+  review_rounds: number;
+  max_review_rounds: number;
 }
 
 export interface PendingApproval {

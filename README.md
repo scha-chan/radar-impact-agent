@@ -155,14 +155,19 @@ sozinho ou se uma ação irreversível é autorizada.
                                                   END
 ```
 
+`human_approval` tem uma terceira saída (card 47): **reanalisar** volta para
+`analyze_impact` com o contexto que o revisor forneceu, fechando o ciclo
+`analyze → score → decide → human_approval` — limitado por `MAX_REVIEW_ROUNDS`.
+
 **Requisitos de modelagem do fluxo, e onde aparecem:**
 
 | Requisito | Onde está no grafo |
 |---|---|
 | Execução sequencial | `extract → guard → ... → score → route` |
-| Ramificação condicional | `guard_adversarial` e `route_by_confidence` |
+| Ramificação condicional | `guard_adversarial`, `route_by_confidence` e `route_after_approval` (aprovar / rejeitar / reanalisar, card 47) |
 | Paralelização | as três coletas de evidência, via `Send` API do LangGraph |
-| Condição de parada | `retries_left` decrementado a cada falha de tool; `approval_expires_at` no aguardo de aprovação |
+| Ciclo | `human_approval → analyze_impact` na reanálise pedida pelo revisor (card 47) |
+| Condição de parada | `retries_left` a cada falha de tool; `approval_expires_at` no aguardo de aprovação; `MAX_REVIEW_ROUNDS` no ciclo de reanálise; `max_steps` (card 35) como backstop |
 
 Todos os nodes são instrumentados uniformemente com logs estruturados
 (`src/observability/logging.py`, card 19) e decisões de autonomia são
@@ -219,6 +224,8 @@ Três camadas de defesa contra conteúdo externo não confiável (seção 13 do 
 **Permissões de tool** (cards 10/17, [`src/governance/tool_executor.py`](src/governance/tool_executor.py)) — toda tool com efeito externo (`search_code`, `fetch_history`, `publish_comment`) precisa de uma `ToolPermission` registrada; sem ela, a chamada é recusada. `publish_comment` (a única ação irreversível) exige `approval_decision == "APPROVED"` quando `human_review_required` é verdadeiro.
 
 **Escalação humana com expiração** (cards 15/16) — pareceres de baixa confiança pausam via `interrupt()` do LangGraph, preservados no checkpointer; uma aprovação que chega depois do prazo (`APPROVAL_TTL_HOURS`, padrão 24h) é descartada e o grafo arquiva sem publicar.
+
+**Escalação acionável** (card 47) — além de aprovar/rejeitar, o revisor pode **reanalisar**: `POST /approvals/{session_id}` com `{"decision": "REANALYZE", "context": "..."}` injeta o contexto que faltou como evidência e o grafo reexecuta `analyze_impact` (ciclo `analyze → score → decide → human_approval`, limitado por `MAX_REVIEW_ROUNDS`, padrão 3). O contexto passa por `detect_by_pattern` antes de entrar (400 se adversarial). `GET /approvals/{session_id}` devolve o parecer parcial e `gaps` — o que faltou para a análise fechar.
 
 **`DRY_RUN`** — com `DRY_RUN=false` (padrão) e um requisito com `issue_number`, `publish_comment` publica de verdade na Issue configurada em `GITHUB_REPO`. Deixe `DRY_RUN=true` para testar sem publicar nada; o comentário é gravado em `audit/dry_run/{session_id}.md`.
 
@@ -359,7 +366,7 @@ Toda execução emite três sinais correlacionados pelo mesmo `session_id`/`corr
   configure_structured_logging()
   ```
 
-- **Trilha de auditoria (JSONL)** — um registro por decisão de autonomia (`ESCALATED`, `ESCALATED_BUDGET_EXCEEDED`, `ESCALATED_NOT_ASSESSED`, `AUTO_PUBLISHED`, `APPROVED_PUBLISHED`, `BLOCKED_ADVERSARIAL`, `REJECTED_ARCHIVED`, `EXPIRED_ARCHIVED`, `PUBLISH_DENIED`), gravado em `AUDIT_LOG_PATH` (padrão `audit/trail.jsonl`). O painel `GET /approvals` da interface mínima deriva desse mesmo arquivo.
+- **Trilha de auditoria (JSONL)** — um registro por decisão de autonomia (`ESCALATED`, `ESCALATED_BUDGET_EXCEEDED`, `ESCALATED_NOT_ASSESSED`, `REANALYSIS_REQUESTED`, `AUTO_PUBLISHED`, `APPROVED_PUBLISHED`, `BLOCKED_ADVERSARIAL`, `REJECTED_ARCHIVED`, `EXPIRED_ARCHIVED`, `PUBLISH_DENIED`), gravado em `AUDIT_LOG_PATH` (padrão `audit/trail.jsonl`). O painel `GET /approvals` da interface mínima deriva desse mesmo arquivo.
 
 - **Trace OpenTelemetry (card 35)** — um span por node (RF-09.2), seguindo as convenções semânticas GenAI (`gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.tool.name`, RF-09.6) nos nodes que chamam LLM ou tool. Todo span carrega `agent.version`/`prompt.version`/`policy.version` fixos (RF-09.5) — sem eles, uma regressão de comportamento não seria rastreável até a versão que a causou. A chamada HTTP de saída das tools (`search_code`/`fetch_history`/`publish_comment`) propaga o contexto do span corrente via W3C Trace Context (header `traceparent`, RF-09.6). Desligado por padrão (`OTEL_CONSOLE_EXPORT=false`); ligar o exporter de console:
 

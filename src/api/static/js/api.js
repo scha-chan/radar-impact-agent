@@ -39,11 +39,14 @@ export function analyzeRequirement(payload) {
 export function listPendingApprovals() {
     return request("/approvals");
 }
-export function submitApprovalDecision(sessionId, decision) {
+export function submitApprovalDecision(sessionId, decision, context) {
     return request(`/approvals/${encodeURIComponent(sessionId)}`, {
         method: "POST",
-        body: JSON.stringify({ decision }),
+        body: JSON.stringify(context !== undefined ? { decision, context } : { decision }),
     });
+}
+export function getEscalationDetail(sessionId) {
+    return request(`/approvals/${encodeURIComponent(sessionId)}`);
 }
 export function getAuditTrail(sessionId) {
     return request(`/audit/${encodeURIComponent(sessionId)}`);

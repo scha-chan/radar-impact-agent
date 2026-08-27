@@ -108,7 +108,14 @@ def build_graph(checkpointer=None):
     graph.add_conditional_edges(
         "human_approval",
         nodes.route_after_approval,
-        {"publish_comment": "publish_comment", "archive": "archive"},
+        {
+            "publish_comment": "publish_comment",
+            "archive": "archive",
+            # card 47: revisor pediu reanálise -> volta ao analyze_impact com
+            # o contexto novo. Ciclo limitado por MAX_REVIEW_ROUNDS (rota da
+            # API) e pelo orçamento de passos (card 35).
+            "analyze_impact": "analyze_impact",
+        },
     )
 
     graph.add_edge("publish_comment", END)
