@@ -69,6 +69,47 @@ def test_record_audit_includes_reason_only_when_present(tmp_path):
     assert "reason" not in entries[1]
 
 
+def test_record_audit_includes_budget_fields_only_when_present(tmp_path):
+    path = tmp_path / "trail.jsonl"
+    record_audit(
+        AuditRecord(
+            session_id="s1",
+            decision="ESCALATED_BUDGET_EXCEEDED",
+            actor="system",
+            risk_level="MEDIUM",
+            steps_taken=12,
+            max_steps=12,
+            duration_seconds=61.234,
+        ),
+        path=str(path),
+    )
+    record_audit(
+        AuditRecord(session_id="s1", decision="ESCALATED", actor="system"),
+        path=str(path),
+    )
+
+    entries = [json.loads(line) for line in path.read_text(encoding="utf-8").strip().splitlines()]
+    assert entries[0]["decision"] == "ESCALATED_BUDGET_EXCEEDED"
+    assert entries[0]["steps_taken"] == 12
+    assert entries[0]["max_steps"] == 12
+    assert entries[0]["duration_seconds"] == 61.234
+    assert "steps_taken" not in entries[1]
+    assert "max_steps" not in entries[1]
+    assert "duration_seconds" not in entries[1]
+
+
+def test_list_pending_sessions_treats_budget_exceeded_escalation_as_pending(tmp_path):
+    path = tmp_path / "trail.jsonl"
+    record_audit(
+        AuditRecord(session_id="s1", decision="ESCALATED_BUDGET_EXCEEDED", actor="system"),
+        path=str(path),
+    )
+
+    pending = list_pending_sessions(path=str(path))
+
+    assert [entry["session_id"] for entry in pending] == ["s1"]
+
+
 def test_read_audit_trail_filters_by_session_id_and_preserves_order(tmp_path):
     path = tmp_path / "trail.jsonl"
     record_audit(AuditRecord(session_id="s1", decision="ESCALATED", actor="system"), path=str(path))

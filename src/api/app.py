@@ -31,12 +31,14 @@ from src.graph.build import build_graph
 from src.graph.checkpointer import build_checkpointer
 from src.graph.state import AgentState, create_initial_state
 from src.observability.audit import list_pending_sessions, read_audit_trail
+from src.observability.tracing import configure_tracing
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_tracing()
     checkpointer = build_checkpointer()
     app.state.graph = build_graph(checkpointer=checkpointer)
     yield

@@ -12,8 +12,10 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from src.graph import nodes
+from src.graph.budget import count_step, is_budget_exceeded
 from src.graph.state import AgentState
 from src.observability.logging import log_node_execution
+from src.observability.tracing import trace_node
 
 
 def _route_after_guard(state: AgentState):
@@ -25,6 +27,13 @@ def _route_after_guard(state: AgentState):
         Send("retrieve_rag", state),
         Send("fetch_history", state),
     ]
+
+
+def _route_after_budget_gate(state: AgentState) -> str:
+    """RF-06.5 (card 35, cenário 5): se o orçamento já estourou antes de
+    `analyze_impact` começar, pula direto para `decide_autonomy` — ver
+    docstring de `nodes.budget_gate`."""
+    return "decide_autonomy" if is_budget_exceeded(state) else "analyze_impact"
 
 
 def build_graph(checkpointer=None):
@@ -40,7 +49,10 @@ def build_graph(checkpointer=None):
     # RF-09.1 (card 19): todo node passa por log_node_execution — um único
     # ponto de instrumentação em vez de cada node logar sua própria entrada
     # e saída, para o log ficar uniforme (mesmos campos, sempre) e não
-    # exigir tocar nodes.py sempre que um node novo for adicionado.
+    # exigir tocar nodes.py sempre que um node novo for adicionado. Mesma
+    # ideia para count_step (RF-06.5, card 35, orçamento) e trace_node
+    # (RF-09.2/09.5, spans com versão fixa) — os três sinais de
+    # observabilidade compartilham este único ponto de instrumentação.
     node_fns: dict[str, object] = {
         "extract_requirement": nodes.extract_requirement,
         "guard_adversarial": nodes.guard_adversarial,
@@ -48,6 +60,7 @@ def build_graph(checkpointer=None):
         "search_codebase": nodes.search_codebase,
         "retrieve_rag": nodes.retrieve_rag,
         "fetch_history": nodes.fetch_history,
+        "budget_gate": nodes.budget_gate,
         "analyze_impact": nodes.analyze_impact,
         "score_risk": nodes.score_risk,
         "decide_autonomy": nodes.decide_autonomy,
@@ -56,7 +69,7 @@ def build_graph(checkpointer=None):
         "archive": nodes.archive,
     }
     for name, fn in node_fns.items():
-        graph.add_node(name, log_node_execution(name, fn))
+        graph.add_node(name, log_node_execution(name, trace_node(name, count_step(fn))))
 
     graph.add_edge(START, "extract_requirement")
     graph.add_edge("extract_requirement", "guard_adversarial")
@@ -68,11 +81,20 @@ def build_graph(checkpointer=None):
     )
     graph.add_edge("block", END)
 
-    # Paralelização: os três nodes de evidência convergem em analyze_impact
-    # (fan-in) — LangGraph so dispara analyze_impact apos os tres concluirem.
-    graph.add_edge("search_codebase", "analyze_impact")
-    graph.add_edge("retrieve_rag", "analyze_impact")
-    graph.add_edge("fetch_history", "analyze_impact")
+    # Paralelização: os três nodes de evidência convergem em budget_gate
+    # (fan-in) — LangGraph so dispara budget_gate apos os tres concluirem.
+    # RF-06.5 (card 35): budget_gate decide se segue para analyze_impact
+    # (caminho normal) ou pula direto para decide_autonomy (orçamento já
+    # estourado — ver _route_after_budget_gate).
+    graph.add_edge("search_codebase", "budget_gate")
+    graph.add_edge("retrieve_rag", "budget_gate")
+    graph.add_edge("fetch_history", "budget_gate")
+
+    graph.add_conditional_edges(
+        "budget_gate",
+        _route_after_budget_gate,
+        {"analyze_impact": "analyze_impact", "decide_autonomy": "decide_autonomy"},
+    )
 
     graph.add_edge("analyze_impact", "score_risk")
     graph.add_edge("score_risk", "decide_autonomy")

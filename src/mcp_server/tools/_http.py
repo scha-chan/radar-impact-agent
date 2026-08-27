@@ -10,8 +10,21 @@ import time
 from collections.abc import Callable
 
 import httpx
+from opentelemetry.propagate import inject
 
 logger = logging.getLogger(__name__)
+
+
+def traceparent_headers() -> dict[str, str]:
+    """RF-09.6: contexto W3C Trace Context (header `traceparent`) do span
+    ativo no momento da chamada — o span do node que está invocando a tool
+    (`observability/tracing.py::trace_node`). Usado por `get_with_retry`
+    (GET, search_code/fetch_history) e por `publish_comment` (POST,
+    diretamente com `httpx.post`, sem passar por aqui) — ponto único para
+    as duas chamadas não divergirem na forma de propagar contexto."""
+    headers: dict[str, str] = {}
+    inject(headers)
+    return headers
 
 
 def get_with_retry(
@@ -36,7 +49,7 @@ def get_with_retry(
 
     for attempt in range(attempts):
         try:
-            response = client.get(path, params=params)
+            response = client.get(path, params=params, headers=traceparent_headers())
             response.raise_for_status()
             return response.json()
         except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.TransportError) as exc:

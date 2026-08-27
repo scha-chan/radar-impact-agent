@@ -22,6 +22,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from langgraph.types import interrupt
+from opentelemetry import trace as otel_trace
 
 from src.domain.risk import (
     ConfidenceInputs,
@@ -38,6 +39,8 @@ from src.governance.adversarial import AdversarialVerdict, detect_by_pattern, re
 from src.governance.permissions import PermissionDeniedError
 from src.governance.tool_executor import ToolExecutor
 from src.observability.audit import AuditRecord, record_audit
+from src.graph.budget import elapsed_seconds, is_budget_exceeded
+from src.graph.llm import LLM_MODEL
 from src.graph.state import AgentState, EvidenceSource, Requirement
 from src.mcp_server.tools.fetch_history import FETCH_HISTORY_PERMISSION
 from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
@@ -65,6 +68,25 @@ _PROBABILITY_BY_NAME = {p.name: p for p in Probability}
 _RISK_LEVEL_NAME = {level: level.name for level in RiskLevel}
 
 
+def _set_gen_ai_span_attributes() -> None:
+    """RF-09.6: convenções semânticas GenAI da OpenTelemetry no span do
+    node atual (aberto por `graph/tracing.py::trace_node`, um por node,
+    RF-09.2). `gen_ai.usage.*` fica de fora — `with_structured_output`
+    (LangChain) devolve o Pydantic já parseado, não o `AIMessage` com
+    `usage_metadata`; adicionar exigiria trocar a chamada por uma sem
+    saída estruturada só para capturar contagem de tokens, o que não vale
+    a troca aqui."""
+    span = otel_trace.get_current_span()
+    span.set_attribute("gen_ai.operation.name", "chat")
+    span.set_attribute("gen_ai.request.model", LLM_MODEL)
+
+
+def _set_gen_ai_tool_span_attribute(tool_name: str) -> None:
+    """RF-09.6: `gen_ai.tool.name` no span do node que invoca uma tool
+    MCP (`search_code`/`fetch_history`/`publish_comment`)."""
+    otel_trace.get_current_span().set_attribute("gen_ai.tool.name", tool_name)
+
+
 def _to_risk_item(risk) -> RiskItem:
     return RiskItem(
         description=risk.description,
@@ -83,6 +105,7 @@ def extract_requirement(state: AgentState) -> dict:
     e a confiança calculada em `score_risk` penaliza o resultado degradado.
     """
     raw_requirement = state["raw_requirement"]
+    _set_gen_ai_span_attributes()
     structured_llm = build_chat_model().with_structured_output(Requirement)
     prompt = prompts.build_extract_requirement_prompt(raw_requirement)
 
@@ -133,6 +156,7 @@ def guard_adversarial(state: AgentState) -> dict:
 
     prompt = prompts.build_guard_adversarial_prompt(raw_requirement)
     try:
+        _set_gen_ai_span_attributes()
         structured_llm = build_chat_model().with_structured_output(AdversarialVerdict)
         verdict = structured_llm.invoke(prompt)
     except Exception as exc:  # noqa: BLE001 - fail-open documentado acima
@@ -189,6 +213,7 @@ def search_codebase(state: AgentState) -> dict:
         return {"code_matches": [], "evidence_sources": [], "tools_failed": []}
 
     failures: list[str] = []
+    _set_gen_ai_tool_span_attribute("search_code")
     matches = _tool_executor.execute(
         "search_code",
         state,
@@ -236,6 +261,7 @@ def fetch_history(state: AgentState) -> dict:
         return {"change_history": [], "evidence_sources": [], "tools_failed": []}
 
     failures: list[str] = []
+    _set_gen_ai_tool_span_attribute("fetch_history")
     entries = _tool_executor.execute(
         "fetch_history",
         state,
@@ -249,6 +275,19 @@ def fetch_history(state: AgentState) -> dict:
     evidence = [EvidenceSource(type="history", ref=entry.ref) for entry in entries]
     tools_failed = ["fetch_history"] if failures else []
     return {"change_history": entries, "evidence_sources": evidence, "tools_failed": tools_failed}
+
+
+def budget_gate(state: AgentState) -> dict:
+    """RF-06.5 (card 35, cenário 5): ponto de checagem entre o fan-in de
+    evidência e `analyze_impact` — se o orçamento (`max_steps`/
+    `MAX_WALL_TIME_SECONDS`) já estourou aqui, `_route_after_budget_gate`
+    (`graph/build.py`) desvia direto para `decide_autonomy`, pulando
+    `analyze_impact`/`score_risk` de propósito: "nunca deixa o requisito
+    passar como se tivesse sido totalmente analisado" (cenário 5). A
+    checagem de novo dentro de `decide_autonomy` cobre o caso do orçamento
+    estourar só durante `analyze_impact`/`score_risk`, depois deste
+    node já ter deixado passar."""
+    return {}
 
 
 def analyze_impact(state: AgentState) -> dict:
@@ -282,6 +321,9 @@ def score_risk(state: AgentState) -> dict:
     }
 
 
+_RISK_RANK = {None: -1, "LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+
+
 def decide_autonomy(state: AgentState) -> dict:
     """RF-06: decisão determinística de autonomia (node `route_by_confidence`).
 
@@ -297,11 +339,27 @@ def decide_autonomy(state: AgentState) -> dict:
     decisão de fato acontece. `AUTO_PUBLISHED`/`APPROVED_PUBLISHED` são
     registradas em `publish_comment`, não aqui, porque só valem depois que
     a publicação de fato acontece (a autorização ainda pode ser negada).
+
+    RF-06.5 (card 35, cenário 5): rede de segurança contra o orçamento
+    estourar durante `analyze_impact`/`score_risk` (depois de
+    `budget_gate` já ter deixado passar) — se estourou, força
+    `risk_level` mínimo MEDIUM (nunca rebaixa um risco já mais grave) e
+    `human_review_required=true`, e a decisão registrada na auditoria é
+    `ESCALATED_BUDGET_EXCEEDED`, não `ESCALATED`.
     """
+    budget_exceeded = is_budget_exceeded(state)
+    risk_level = state["risk_level"]
+    if budget_exceeded and _RISK_RANK.get(risk_level, -1) < _RISK_RANK["MEDIUM"]:
+        risk_level = "MEDIUM"
+
     requires_review = (
-        state["risk_level"] == "CRITICAL" or (state["confidence"] or 0) < CONFIDENCE_THRESHOLD
+        budget_exceeded
+        or risk_level == "CRITICAL"
+        or (state["confidence"] or 0) < CONFIDENCE_THRESHOLD
     )
     update: dict = {"human_review_required": requires_review}
+    if risk_level != state["risk_level"]:
+        update["risk_level"] = risk_level
     if requires_review:
         update["approval_expires_at"] = datetime.now(timezone.utc) + timedelta(
             hours=APPROVAL_TTL_HOURS
@@ -309,13 +367,26 @@ def decide_autonomy(state: AgentState) -> dict:
         record_audit(
             AuditRecord(
                 session_id=state["session_id"],
-                decision="ESCALATED",
+                decision="ESCALATED_BUDGET_EXCEEDED" if budget_exceeded else "ESCALATED",
                 actor="system",
-                risk_level=state["risk_level"],
+                risk_level=risk_level,
                 confidence=state["confidence"],
                 threshold=CONFIDENCE_THRESHOLD,
+                steps_taken=state["steps_taken"] if budget_exceeded else None,
+                max_steps=state["max_steps"] if budget_exceeded else None,
+                duration_seconds=round(elapsed_seconds(state), 3) if budget_exceeded else None,
             )
         )
+        if budget_exceeded:
+            logger.warning(
+                "budget_exceeded",
+                extra={
+                    "session_id": state["session_id"],
+                    "steps_taken": state["steps_taken"],
+                    "max_steps": state["max_steps"],
+                    "duration_seconds": round(elapsed_seconds(state), 3),
+                },
+            )
     return update
 
 
@@ -404,6 +475,7 @@ def publish_comment(state: AgentState) -> dict:
     registrado, não silencioso).
     """
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+    _set_gen_ai_tool_span_attribute("publish_comment")
     try:
         url = _tool_executor.execute(
             "publish_comment",

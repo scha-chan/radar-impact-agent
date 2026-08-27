@@ -94,3 +94,21 @@ def test_create_initial_state_generates_distinct_session_ids():
 def test_create_initial_state_respects_max_retries():
     state = create_initial_state("req", max_retries=5)
     assert state["retries_left"] == 5
+
+
+def test_create_initial_state_sets_budget_and_version_defaults():
+    from src.graph.state import AGENT_VERSION, MAX_STEPS_DEFAULT, POLICY_VERSION, PROMPT_VERSION
+
+    state = create_initial_state("req")
+
+    assert state["steps_taken"] == 0
+    assert state["max_steps"] == MAX_STEPS_DEFAULT
+    assert isinstance(state["started_at"], datetime)
+    assert state["agent_version"] == AGENT_VERSION
+    assert state["prompt_version"] == PROMPT_VERSION
+    assert state["policy_version"] == POLICY_VERSION
+
+
+def test_create_initial_state_respects_max_steps():
+    state = create_initial_state("req", max_steps=0)
+    assert state["max_steps"] == 0
