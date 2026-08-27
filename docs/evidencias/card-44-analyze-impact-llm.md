@@ -30,4 +30,4 @@ A topologia do grafo (card 04) nasceu com todos os nodes stub. As integrações 
 
 ## Limitação remanescente
 
-A **composição do parecer final** continua provisória e vira o **card 45**: `render_comment` (`src/mcp_server/tools/publish_comment.py`) monta um corpo markdown mínimo a partir de `risk_level`/`confidence`/`requirement` e ainda não consome `impacts`/`risks`/`dependencies`/`recommended_tests`; `state["analysis"]` (`ImpactAnalysis`) nunca é populado; falta o prompt `04-compose-report` (seção 18 do PRD).
+A **composição do parecer final** continua provisória e vira o **card 45** (concluído em seguida): `render_comment` (`src/mcp_server/tools/publish_comment.py`) monta um corpo markdown mínimo a partir de `risk_level`/`confidence`/`requirement` e ainda não consome `impacts`/`risks`/`dependencies`/`recommended_tests`; `state["analysis"]` (`ImpactAnalysis`) nunca é populado; falta o prompt `04-compose-report` (seção 18 do PRD). Ver [`card-45-compose-report.md`](card-45-compose-report.md).

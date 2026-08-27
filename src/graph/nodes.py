@@ -33,13 +33,23 @@ from src.graph.llm import build_chat_model
 from src.governance.adversarial import AdversarialVerdict, detect_by_pattern, render_block_message
 from src.governance.permissions import PermissionDeniedError
 from src.governance.tool_executor import ToolExecutor
-from src.observability.audit import AuditRecord, record_audit
+from src.observability.audit import AuditRecord, read_audit_trail, record_audit
 from src.graph.budget import elapsed_seconds, is_budget_exceeded
+from src.graph.escalation import describe_gaps, escalation_reason, last_escalation_decision
 from src.graph.llm import LLM_MODEL
-from src.graph.state import AgentState, EvidenceSource, ImpactAnalysisResult, Requirement
+from src.graph.state import (
+    MAX_REVIEW_ROUNDS,
+    AgentState,
+    ComposedReport,
+    EvidenceSource,
+    ImpactAnalysis,
+    ImpactAnalysisResult,
+    Requirement,
+    ReviewBrief,
+)
 from src.mcp_server.tools.fetch_history import FETCH_HISTORY_PERMISSION
 from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
-from src.mcp_server.tools.publish_comment import PUBLISH_COMMENT_PERMISSION
+from src.mcp_server.tools.publish_comment import PUBLISH_COMMENT_PERMISSION, render_comment
 from src.mcp_server.tools.publish_comment import publish_comment as _publish_comment
 from src.mcp_server.tools.search_code import SEARCH_CODE_PERMISSION, search_code
 from src.rag.retriever import retrieve_patterns
@@ -61,6 +71,12 @@ _tool_executor.register(PUBLISH_COMMENT_PERMISSION)
 _SEVERITY_BY_NAME = {s.name: s for s in Severity}
 _PROBABILITY_BY_NAME = {p.name: p for p in Probability}
 _RISK_LEVEL_NAME = {level: level.name for level in RiskLevel}
+
+
+def _effective_github_repo(state: AgentState) -> str:
+    """Repositório-alvo da execução: o informado na interface (card 43,
+    `state["github_repo"]`) ou, se não houver, o `GITHUB_REPO` do ambiente."""
+    return state.get("github_repo") or os.getenv("GITHUB_REPO", "")
 
 
 def _set_gen_ai_span_attributes() -> None:
@@ -214,7 +230,7 @@ def search_codebase(state: AgentState) -> dict:
         state,
         lambda: search_code(
             search_terms,
-            repo=os.getenv("GITHUB_REPO", ""),
+            repo=_effective_github_repo(state),
             github_token=os.getenv("GITHUB_TOKEN", ""),
             failures=failures,
         ),
@@ -262,7 +278,7 @@ def fetch_history(state: AgentState) -> dict:
         state,
         lambda: _fetch_history(
             search_terms,
-            repo=os.getenv("GITHUB_REPO", ""),
+            repo=_effective_github_repo(state),
             github_token=os.getenv("GITHUB_TOKEN", ""),
             failures=failures,
         ),
@@ -303,6 +319,8 @@ def _known_evidence_refs(state: AgentState) -> set[str]:
         refs.add(entry.ref)
     for source in state["evidence_sources"]:
         refs.add(source.ref)
+    if state["reviewer_context"]:
+        refs.add("revisor")  # card 47: impacto pode se apoiar no contexto do revisor
     return {ref for ref in refs if ref}
 
 
@@ -327,6 +345,10 @@ def analyze_impact(state: AgentState) -> dict:
     sustentar. Caso contrário, impactos cujo campo `evidence` não referencia
     nenhuma fonte coletada são descartados (com log), nunca publicados.
 
+    Card 47: numa reanálise pedida pelo revisor, `reviewer_context` entra
+    no prompt como mais uma fonte de evidência (já registrado em
+    `evidence_sources` por `human_approval`).
+
     Tratamento de falha (mesma filosofia de `extract_requirement`/
     `guard_adversarial`): erro de chamada ou de parse do LLM → listas
     vazias e log; o grafo continua e `score_risk` penaliza a confiança do
@@ -342,6 +364,7 @@ def analyze_impact(state: AgentState) -> dict:
         state["code_matches"],
         state["impact_patterns"],
         state["change_history"],
+        state["reviewer_context"],
     )
     try:
         structured_llm = build_chat_model().with_structured_output(ImpactAnalysisResult)
@@ -420,9 +443,19 @@ def decide_autonomy(state: AgentState) -> dict:
     `risk_level` mínimo MEDIUM (nunca rebaixa um risco já mais grave) e
     `human_review_required=true`, e a decisão registrada na auditoria é
     `ESCALATED_BUDGET_EXCEEDED`, não `ESCALATED`.
+
+    Card 46: quando o parecer escala mas `analyze_impact` não produziu
+    nenhum impacto nem risco e o risco agregado é baixo — evidência
+    insuficiente, não uma análise que concluiu "risco baixo" —, o mesmo
+    piso MEDIUM é aplicado e `risk_assessed=False` sinaliza para a UI e o
+    comentário mostrarem "não avaliado" em vez de "Baixo". A decisão de
+    auditoria é `ESCALATED_NOT_ASSESSED`.
     """
     budget_exceeded = is_budget_exceeded(state)
-    risk_level = state["risk_level"]
+    original_risk_level = state["risk_level"]
+    risk_level = original_risk_level
+    already_elevated = _RISK_RANK.get(original_risk_level, -1) >= _RISK_RANK["MEDIUM"]
+
     if budget_exceeded and _RISK_RANK.get(risk_level, -1) < _RISK_RANK["MEDIUM"]:
         risk_level = "MEDIUM"
 
@@ -431,17 +464,37 @@ def decide_autonomy(state: AgentState) -> dict:
         or risk_level == "CRITICAL"
         or (state["confidence"] or 0) < CONFIDENCE_THRESHOLD
     )
-    update: dict = {"human_review_required": requires_review}
-    if risk_level != state["risk_level"]:
+
+    # "avaliado" = analyze_impact produziu algo, OU o risco já era >= MEDIUM
+    # (houve sinal), OU nem precisou de revisão (confiança alta é um veredito
+    # real). Caso contrário: escalou sem base — não avaliado.
+    risk_assessed = (
+        bool(state["impacts"] or state["risks"]) or already_elevated or not requires_review
+    )
+    not_assessed_escalation = requires_review and not budget_exceeded and not risk_assessed
+    if not_assessed_escalation and _RISK_RANK.get(risk_level, -1) < _RISK_RANK["MEDIUM"]:
+        risk_level = "MEDIUM"
+
+    update: dict = {
+        "human_review_required": requires_review,
+        "risk_assessed": risk_assessed,
+    }
+    if risk_level != original_risk_level:
         update["risk_level"] = risk_level
     if requires_review:
         update["approval_expires_at"] = datetime.now(timezone.utc) + timedelta(
             hours=APPROVAL_TTL_HOURS
         )
+        if budget_exceeded:
+            decision = "ESCALATED_BUDGET_EXCEEDED"
+        elif not_assessed_escalation:
+            decision = "ESCALATED_NOT_ASSESSED"
+        else:
+            decision = "ESCALATED"
         record_audit(
             AuditRecord(
                 session_id=state["session_id"],
-                decision="ESCALATED_BUDGET_EXCEEDED" if budget_exceeded else "ESCALATED",
+                decision=decision,
                 actor="system",
                 risk_level=risk_level,
                 confidence=state["confidence"],
@@ -465,7 +518,70 @@ def decide_autonomy(state: AgentState) -> dict:
 
 
 def route_after_decision(state: AgentState) -> str:
-    return "human_approval" if state["human_review_required"] else "publish_comment"
+    return "brief_escalation" if state["human_review_required"] else "publish_comment"
+
+
+def _fallback_review_brief(state: AgentState, reason: str, gaps: list[str]) -> str:
+    requirement = state["requirement"]
+    what = (
+        requirement.text.strip().splitlines()[0][:140] if requirement else state["raw_requirement"]
+    )
+    missing = " ".join(gaps) if gaps else "Sem lacunas específicas registradas."
+    return (
+        f"Mudança pedida: {what}. Escalou porque {reason} "
+        f"(risco {state['risk_level'] or '—'}, confiança {state['confidence'] if state['confidence'] is not None else '—'}). "
+        f"{missing}\n\n"
+        "O que ajudaria numa reanálise: aponte onde já existe código ou integração "
+        "relacionada, ou peça a reanálise se não houver o que acrescentar."
+    )
+
+
+def brief_escalation(state: AgentState) -> dict:
+    """Card 49: resumo para o revisor — o que a mudança pede, por que
+    escalou e o que ajudaria numa reanálise. Roda entre `decide_autonomy` e
+    `human_approval`, e de novo a cada rodada de reanálise (card 47).
+
+    O LLM só redige (`ReviewBrief`); falha da chamada → texto de fallback
+    determinístico montado dos mesmos dados. Não bloqueia a escalação.
+    """
+    if not state["human_review_required"]:
+        return {}
+
+    last_decision = last_escalation_decision(read_audit_trail(state["session_id"]))
+    reason = escalation_reason(last_decision)
+    gaps = describe_gaps(state, last_decision)
+
+    requirement = state["requirement"]
+    if requirement is None:
+        return {"review_brief": _fallback_review_brief(state, reason, gaps)}
+
+    _set_gen_ai_span_attributes()
+    prompt = prompts.build_review_brief_prompt(
+        requirement,
+        risk_level=state["risk_level"],
+        risk_assessed=state["risk_assessed"],
+        confidence=state["confidence"],
+        threshold=CONFIDENCE_THRESHOLD,
+        reason=reason,
+        impacts=state["impacts"],
+        risks=state["risks"],
+        gaps=gaps,
+    )
+    try:
+        brief = build_chat_model().with_structured_output(ReviewBrief).invoke(prompt)
+    except Exception as exc:  # noqa: BLE001 - degradação: escala com o brief de fallback
+        logger.error(
+            "brief_escalation_failed",
+            extra={"session_id": state["session_id"], "error": str(exc)},
+        )
+        return {"review_brief": _fallback_review_brief(state, reason, gaps)}
+
+    summary = (brief.summary or "").strip() or _fallback_review_brief(state, reason, gaps)
+    suggestion = (brief.suggested_context or "").strip()
+    text = (
+        summary if not suggestion else f"{summary}\n\nO que ajudaria numa reanálise: {suggestion}"
+    )
+    return {"review_brief": text}
 
 
 def human_approval(state: AgentState) -> dict:
@@ -497,6 +613,14 @@ def human_approval(state: AgentState) -> dict:
     (fora do escopo deste card — caberia num scheduler do card 30) pode
     retomar sessões expiradas com qualquer valor de resume, ou nenhum, para
     arquivá-las sem publicar.
+
+    Card 47: o valor de resume pode ser um `dict`
+    `{"action": "REANALYZE", "context": str|None}` além das strings
+    `"APPROVED"`/`"REJECTED"`. Numa reanálise, o node não resolve a
+    aprovação — injeta o contexto do revisor como evidência, incrementa
+    `review_rounds`, e `route_after_approval` volta o grafo para
+    `analyze_impact`. O teto de rodadas é aplicado na rota da API
+    (`submit_approval`), não aqui.
     """
     if state["approval_decision"] is not None:
         return {}
@@ -509,17 +633,75 @@ def human_approval(state: AgentState) -> dict:
             },
         )
         return {"approval_decision": "REJECTED"}
-    decision = interrupt(
+    resumed = interrupt(
         {
             "session_id": state["session_id"],
             "risk_level": state["risk_level"],
             "confidence": state["confidence"],
+            "review_rounds": state["review_rounds"],
+            "max_review_rounds": MAX_REVIEW_ROUNDS,
             "expires_at": state["approval_expires_at"].isoformat()
             if state["approval_expires_at"]
             else None,
         }
     )
-    return {"approval_decision": decision}
+
+    action, context = _parse_review_action(resumed)
+    if action == "REANALYZE":
+        return _request_reanalysis(state, context)
+    return {"approval_decision": action, "reanalysis_requested": False}
+
+
+def _parse_review_action(resumed) -> tuple[str, str | None]:
+    """O resume pode ser a string `"APPROVED"`/`"REJECTED"` (compat, o que
+    a rota manda para aprovar/rejeitar) ou o dict do card 47
+    `{"action": "REANALYZE", "context": ...}`."""
+    if isinstance(resumed, dict):
+        return resumed.get("action", "REJECTED"), resumed.get("context")
+    return resumed, None
+
+
+# Passos que uma rodada de reanálise adiciona (analyze_impact + score_risk +
+# decide_autonomy + human_approval, com margem). O orçamento de execução
+# (card 35) é estendido por rodada para a reanálise não estourar sozinha —
+# o teto real das rodadas é MAX_REVIEW_ROUNDS, aplicado na rota da API.
+_STEPS_PER_REANALYSIS = 6
+
+
+def _request_reanalysis(state: AgentState, context: str | None) -> dict:
+    round_number = state["review_rounds"] + 1
+    ctx = (context or "").strip()
+    update: dict = {
+        "approval_decision": None,
+        "human_review_required": False,
+        "reanalysis_requested": True,
+        "review_rounds": round_number,
+        "max_steps": state["max_steps"] + _STEPS_PER_REANALYSIS,
+    }
+    if ctx:
+        update["reviewer_context"] = state["reviewer_context"] + [ctx]
+        update["evidence_sources"] = [
+            EvidenceSource(type="reviewer", ref=f"revisor#{round_number}")
+        ]
+    logger.info(
+        "reanalysis_requested",
+        extra={
+            "session_id": state["session_id"],
+            "review_round": round_number,
+            "has_context": bool(ctx),
+        },
+    )
+    record_audit(
+        AuditRecord(
+            session_id=state["session_id"],
+            decision="REANALYSIS_REQUESTED",
+            actor="human",
+            risk_level=state["risk_level"],
+            confidence=state["confidence"],
+            reason=(ctx[:200] or "reanálise sem contexto adicional"),
+        )
+    )
+    return update
 
 
 def _is_approval_expired(state: AgentState) -> bool:
@@ -528,11 +710,91 @@ def _is_approval_expired(state: AgentState) -> bool:
 
 
 def route_after_approval(state: AgentState) -> str:
-    return "publish_comment" if state["approval_decision"] == "APPROVED" else "archive"
+    if state["approval_decision"] == "APPROVED":
+        return "publish_comment"
+    if state["reanalysis_requested"]:
+        return "analyze_impact"  # card 47: revisor pediu reanálise com contexto novo
+    return "archive"
+
+
+def _build_impact_analysis(state: AgentState, requirement_summary: str) -> ImpactAnalysis:
+    """Monta o `ImpactAnalysis` (seção 8 do PRD) a partir do state — puro
+    e determinístico. `risk_level`/`confidence` já foram decididos por
+    `score_risk`/`decide_autonomy`; aqui só são copiados para o objeto de
+    saída (com defaults defensivos para o caminho de orçamento estourado,
+    card 35, que pula `score_risk`)."""
+    return ImpactAnalysis(
+        session_id=state["session_id"],
+        issue_number=state["issue_number"],
+        requirement_summary=requirement_summary,
+        risk_level=state["risk_level"] or "LOW",
+        risk_assessed=state["risk_assessed"],
+        confidence=state["confidence"] if state["confidence"] is not None else 0,
+        human_review_required=state["human_review_required"],
+        impacts=state["impacts"],
+        risks=state["risks"],
+        dependencies=state["dependencies"],
+        recommended_tests=state["recommended_tests"],
+        evidence_sources=state["evidence_sources"],
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+def _fallback_requirement_summary(state: AgentState) -> str:
+    requirement = state["requirement"]
+    text = (requirement.text if requirement else state["raw_requirement"]).strip()
+    first_line = text.splitlines()[0] if text else ""
+    return first_line[:140].rstrip()
+
+
+def _fallback_executive_summary(analysis: ImpactAnalysis) -> str:
+    review = (
+        "Requer revisão humana antes de qualquer implementação."
+        if analysis.human_review_required
+        else "Publicado automaticamente pelo RADAR."
+    )
+    return (
+        f"Análise concluída com nível de risco {analysis.risk_level} e confiança "
+        f"{analysis.confidence}/100. {len(analysis.impacts)} impacto(s) e "
+        f"{len(analysis.risks)} risco(s) identificados. {review}"
+    )
+
+
+def _compose_report(state: AgentState) -> tuple[ImpactAnalysis, str]:
+    """RF-08 / prompt `04-compose-report` (card 45): monta o `ImpactAnalysis`
+    e redige o texto do parecer.
+
+    Só a redação passa pelo LLM — a condensação do requisito numa linha e o
+    resumo executivo. Os campos estruturados (risco, confiança, impactos,
+    riscos) são copiados do state, nunca reescritos pelo modelo. Falha da
+    chamada → textos de fallback determinísticos e o parecer é publicado
+    mesmo assim (o conteúdo que importa para a decisão já está no objeto).
+    """
+    base_summary = _fallback_requirement_summary(state)
+    analysis = _build_impact_analysis(state, base_summary)
+    exec_fallback = _fallback_executive_summary(analysis)
+
+    try:
+        _set_gen_ai_span_attributes()
+        structured_llm = build_chat_model().with_structured_output(ComposedReport)
+        composed = structured_llm.invoke(prompts.build_compose_report_prompt(analysis))
+    except Exception as exc:  # noqa: BLE001 - degradação: publica com texto de fallback
+        logger.error(
+            "compose_report_failed",
+            extra={"session_id": state["session_id"], "error": str(exc)},
+        )
+        return analysis, exec_fallback
+
+    requirement_summary = (composed.requirement_summary or "").strip() or base_summary
+    executive_summary = (composed.executive_summary or "").strip() or exec_fallback
+    analysis = analysis.model_copy(update={"requirement_summary": requirement_summary})
+    return analysis, executive_summary
 
 
 def publish_comment(state: AgentState) -> dict:
-    """RF-08: publica o parecer (ou grava em arquivo se DRY_RUN/sem Issue).
+    """RF-08: compõe o parecer (`_compose_report`, card 45) e o publica (ou
+    grava em arquivo se DRY_RUN/sem Issue).
+
     Protegido em duas camadas (RF-08.2/RF-08.3, card 17): o `ToolExecutor`
     recusaria a chamada se `publish_comment` não estivesse registrada; a
     própria tool (`mcp_server/tools/publish_comment.py`) chama `authorize()`
@@ -549,6 +811,8 @@ def publish_comment(state: AgentState) -> dict:
     registrado, não silencioso).
     """
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+    analysis, prose = _compose_report(state)
+    body = render_comment(state, analysis=analysis, prose=prose)
     _set_gen_ai_tool_span_attribute("publish_comment")
     try:
         url = _tool_executor.execute(
@@ -556,9 +820,10 @@ def publish_comment(state: AgentState) -> dict:
             state,
             lambda: _publish_comment(
                 state,
-                repo=os.getenv("GITHUB_REPO", ""),
+                repo=_effective_github_repo(state),
                 github_token=os.getenv("GITHUB_TOKEN", ""),
                 dry_run=dry_run,
+                body=body,
             ),
         )
     except PermissionDeniedError as exc:
@@ -571,7 +836,7 @@ def publish_comment(state: AgentState) -> dict:
                 reason=str(exc),
             )
         )
-        return {"published_comment_url": None}
+        return {"analysis": analysis, "published_comment_url": None}
 
     record_audit(
         AuditRecord(
@@ -583,7 +848,7 @@ def publish_comment(state: AgentState) -> dict:
             tool_authorized="publish_comment",
         )
     )
-    return {"published_comment_url": url}
+    return {"analysis": analysis, "published_comment_url": url}
 
 
 def archive(state: AgentState) -> dict:

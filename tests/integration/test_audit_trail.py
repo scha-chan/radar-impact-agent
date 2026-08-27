@@ -10,15 +10,20 @@ from datetime import datetime, timedelta, timezone
 from src.governance.tool_executor import ToolExecutor
 from src.graph import nodes
 from src.graph.build import build_graph
-from src.graph.state import create_initial_state
+from src.graph.state import Risk, create_initial_state
 from src.observability.audit import read_audit_trail
 from tests.helpers import mock_llm
 
 
-def test_decide_autonomy_records_escalated():
+def _a_risk() -> Risk:
+    return Risk(description="algum risco", severity="LOW", probability="POSSIBLE")
+
+
+def test_decide_autonomy_records_escalated_when_risk_was_assessed():
     state = create_initial_state("x")
     state["risk_level"] = "LOW"
     state["confidence"] = 10
+    state["risks"] = [_a_risk()]
 
     nodes.decide_autonomy(state)
 
@@ -28,6 +33,22 @@ def test_decide_autonomy_records_escalated():
     assert entries[0]["actor"] == "system"
     assert entries[0]["confidence"] == 10
     assert entries[0]["threshold"] == nodes.CONFIDENCE_THRESHOLD
+
+
+def test_decide_autonomy_records_escalated_not_assessed_without_impacts_or_risks():
+    # Card 46: escalou sem nenhum impacto/risco identificado -> não avaliado,
+    # piso MEDIUM, decisão de auditoria distinta.
+    state = create_initial_state("x")
+    state["risk_level"] = "LOW"
+    state["confidence"] = 10
+
+    update = nodes.decide_autonomy(state)
+
+    assert update["risk_level"] == "MEDIUM"
+    assert update["risk_assessed"] is False
+    entries = read_audit_trail(state["session_id"])
+    assert entries[0]["decision"] == "ESCALATED_NOT_ASSESSED"
+    assert entries[0]["risk_level"] == "MEDIUM"
 
 
 def test_decide_autonomy_does_not_record_when_auto_publishing():
@@ -134,5 +155,6 @@ def test_full_graph_run_correlates_escalation_and_archival_by_session_id(monkeyp
 
     entries = read_audit_trail(result["session_id"])
     decisions = [e["decision"] for e in entries]
-    assert decisions == ["ESCALATED", "REJECTED_ARCHIVED"]
+    # feature "outro" sem evidência -> escala sem avaliação (card 46).
+    assert decisions == ["ESCALATED_NOT_ASSESSED", "REJECTED_ARCHIVED"]
     assert {e["session_id"] for e in entries} == {result["session_id"]}

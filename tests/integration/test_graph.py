@@ -48,7 +48,10 @@ def test_graph_runs_end_to_end_and_escalates_when_evidence_is_empty():
     result = graph.invoke(state)
 
     assert result["requirement"] is not None
-    assert result["risk_level"] == "LOW"
+    # Sem evidência, analyze_impact não produz impacto/risco -> escala sem
+    # avaliação (card 46): risco vai ao piso MEDIUM e risk_assessed é False.
+    assert result["risk_level"] == "MEDIUM"
+    assert result["risk_assessed"] is False
     assert result["confidence"] is not None
     assert result["human_review_required"] is True
     assert "__interrupt__" in result
@@ -93,7 +96,8 @@ def test_route_after_decision_publishes_without_review():
 def test_route_after_decision_escalates_with_review():
     state = create_initial_state("x")
     state["human_review_required"] = True
-    assert route_after_decision(state) == "human_approval"
+    # card 49: passa por brief_escalation (gera o resumo) antes de human_approval.
+    assert route_after_decision(state) == "brief_escalation"
 
 
 def test_route_after_approval_publishes_when_approved():

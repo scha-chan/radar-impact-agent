@@ -21,6 +21,8 @@ mutmut-report.xml
 
 # Dados e persistência
 *.db
+*.db-shm
+*.db-wal
 chroma/
 audit/
 
