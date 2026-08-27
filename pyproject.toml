@@ -43,3 +43,4 @@ use_git_change_detection = false
 # desliga a coleta de cobertura (pytest-cov) só para essas chamadas, sem
 # tocar no addopts real usado pela suíte completa.
 pytest_add_cli_args = ["--no-cov"]
+debug = true
