@@ -127,6 +127,19 @@ class ImpactAnalysisResult(BaseModel):
     recommended_tests: list[str] = Field(default_factory=list)
 
 
+class ComposedReport(BaseModel):
+    """Saida do LLM em `04-compose-report` (card 45).
+
+    O modelo so redige texto — condensa o requisito numa linha e escreve o
+    resumo executivo. Nao decide nem altera nenhum campo estruturado do
+    `ImpactAnalysis` (risco, confianca, impactos, riscos): esses sao
+    montados deterministicamente e renderizados a partir do objeto.
+    """
+
+    requirement_summary: str
+    executive_summary: str
+
+
 class ImpactAnalysis(BaseModel):
     """Saida principal do RADAR, publicada como comentario na Issue de origem."""
 

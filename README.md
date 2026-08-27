@@ -346,7 +346,7 @@ resultado = graph.invoke(state)
 print(resultado["requirement"].feature_type, resultado["risk_level"], resultado["confidence"])
 ```
 
-Todos os nodes do grafo são reais — `analyze_impact` (card 44) foi o último a sair de stub. Só a composição definitiva do comentário a partir de `ImpactAnalysis` (prompt `04-compose-report`) ainda é provisória (card 45). Sem `GITHUB_TOKEN`/`GITHUB_REPO` configurados, sem o modelo de embedding baixado, sem o Ollama no ar, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado, a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — degradação esperada (seção 11 do PRD), não uma falha.
+Todos os nodes do grafo são reais — `analyze_impact` (card 44) e a composição do parecer final (`ImpactAnalysis` + prompt `04-compose-report`, card 45) foram as últimas peças a sair de stub. Sem `GITHUB_TOKEN`/`GITHUB_REPO` configurados, sem o modelo de embedding baixado, sem o Ollama no ar, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado, a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — degradação esperada (seção 11 do PRD), não uma falha.
 
 ### Observabilidade: os três sinais e uma investigação real
 
@@ -434,8 +434,7 @@ Prompts versionados e documentados em [`docs/prompts/`](docs/prompts/): objetivo
 | [`01-extract-requirement.md`](docs/prompts/01-extract-requirement.md) | `extract_requirement` | 06 |
 | [`02-guard-adversarial.md`](docs/prompts/02-guard-adversarial.md) | `guard_adversarial` | 18 |
 | [`03-analyze-impact.md`](docs/prompts/03-analyze-impact.md) | `analyze_impact` | 44 |
-
-`04-compose-report.md` chega com a composição definitiva do parecer a partir de `ImpactAnalysis` (card 45).
+| [`04-compose-report.md`](docs/prompts/04-compose-report.md) | `publish_comment` (`_compose_report`) | 45 |
 
 **Refinamento de prompt (card 32):** análise crítica de um ciclo de refinamento (problema observado, alteração aplicada, resultado antes/depois) — pendente, documentado em `docs/prompts/refinamento.md` quando o card 32 for concluído.
 
@@ -456,7 +455,7 @@ Adaptado da seção 25 do PRD:
 - A probabilidade dos riscos do requisito analisado (RF-05) é estimada pelo LLM, não derivada de dados históricos reais.
 - O dataset de anomalia (card 27) é simulado (50 execuções), por ausência de volume real de produção.
 - Sem controle de acesso — qualquer pessoa com acesso ao painel pode aprovar (RF-10 não inclui autenticação).
-- A composição definitiva do parecer permanece provisória (card 45): `render_comment` monta um corpo markdown mínimo e `state["analysis"]` (`ImpactAnalysis`) nunca é populado — `analyze_impact` já classifica impactos/riscos de verdade (card 44), mas o comentário publicado ainda não os renderiza.
+- O parecer publicado é redigido por um LLM local (`mistral`): a estrutura (risco, confiança, impactos, riscos) é determinística, mas o texto do resumo executivo pode variar em qualidade entre modelos.
 
 **Evolução futura:** análise de dependências via AST para substituir a busca textual; calibração de probabilidade com incidentes reais; autenticação e papéis no fluxo de aprovação; suporte a Jira/Azure DevOps além do GitHub.
 

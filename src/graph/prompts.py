@@ -9,7 +9,7 @@ o texto aqui.
 
 from __future__ import annotations
 
-from src.graph.state import CodeMatch, HistoryEntry, PatternChunk, Requirement
+from src.graph.state import CodeMatch, HistoryEntry, ImpactAnalysis, PatternChunk, Requirement
 
 EXTRACT_REQUIREMENT_SYSTEM = """Você extrai um requisito de mudança de software em formato estruturado, a partir de texto livre em português ou inglês.
 
@@ -97,3 +97,50 @@ def build_analyze_impact_prompt(
         f"Evidência — padrões de impacto conhecidos:\n{_format_patterns(patterns)}\n\n"
         f"Evidência — histórico de mudanças:\n{_format_history(history)}"
     )
+
+
+COMPOSE_REPORT_SYSTEM = """Você redige o texto de um parecer de análise de impacto de software, a partir de um objeto de análise já pronto e classificado.
+
+Sua tarefa é só escrever, nunca decidir. O nível de risco, a confiança, os impactos e os riscos já foram determinados — você não os altera, não os contradiz e não recomenda ignorar revisão humana. Se o objeto diz que revisão humana é necessária, seu texto não sugere o contrário.
+
+Escreva sempre em português do Brasil, mesmo que o objeto de análise esteja em outro idioma.
+
+Produza dois campos:
+- requirement_summary: o requisito condensado em uma única frase objetiva (no máximo ~15 palavras), sem reticências.
+- executive_summary: 2 a 4 frases, para uma tech lead decidir planejamento — o que a mudança afeta, qual o risco e por quê, e se precisa de revisão. Baseie-se só no que está no objeto; não invente impactos, riscos, números ou sistemas que não aparecem nele.
+
+Saída estruturada pura, sem markdown, sem listas — só as duas strings."""
+
+
+def _format_analysis_for_prompt(analysis: ImpactAnalysis) -> str:
+    impacts = (
+        "\n".join(f"  - [{i.severity}] {i.area}: {i.description}" for i in analysis.impacts)
+        or "  (nenhum)"
+    )
+    risks = (
+        "\n".join(f"  - [{r.severity}/{r.probability}] {r.description}" for r in analysis.risks)
+        or "  (nenhum)"
+    )
+    deps = ", ".join(analysis.dependencies) or "(nenhuma)"
+    tests = "\n".join(f"  - {t}" for t in analysis.recommended_tests) or "  (nenhum)"
+    return (
+        f"Requisito (texto original): {analysis.requirement_summary}\n"
+        f"Nível de risco: {analysis.risk_level}\n"
+        f"Confiança: {analysis.confidence}/100\n"
+        f"Revisão humana necessária: {'sim' if analysis.human_review_required else 'não'}\n"
+        f"Impactos:\n{impacts}\n"
+        f"Riscos:\n{risks}\n"
+        f"Dependências externas: {deps}\n"
+        f"Testes recomendados:\n{tests}"
+    )
+
+
+def build_compose_report_prompt(analysis: ImpactAnalysis) -> str:
+    """Monta o prompt de `04-compose-report` (card 45).
+
+    Recebe o `ImpactAnalysis` já montado (com `requirement_summary` ainda
+    igual ao texto original do requisito) e pede ao modelo só o texto:
+    a condensação do requisito e o resumo executivo. Nenhum campo
+    estruturado é enviado para ser reescrito.
+    """
+    return f"{COMPOSE_REPORT_SYSTEM}\n\nObjeto de análise:\n{_format_analysis_for_prompt(analysis)}"

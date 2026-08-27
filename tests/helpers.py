@@ -9,7 +9,13 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from src.governance.adversarial import AdversarialVerdict
 from src.graph import nodes
-from src.graph.state import Impact, ImpactAnalysisResult, Requirement, Risk
+from src.graph.state import (
+    ComposedReport,
+    Impact,
+    ImpactAnalysisResult,
+    Requirement,
+    Risk,
+)
 
 
 def mock_llm(
@@ -24,19 +30,22 @@ def mock_llm(
     risks: list[Risk] | None = None,
     dependencies: list[str] | None = None,
     recommended_tests: list[str] | None = None,
+    requirement_summary: str | None = None,
+    executive_summary: str = "Resumo executivo de teste.",
 ) -> None:
     """Substitui `nodes.build_chat_model` por um duplo que responde de
     forma diferente conforme o schema pedido a `with_structured_output` —
     `extract_requirement` pede `Requirement`, `guard_adversarial` (card 18)
     pede `AdversarialVerdict`, `analyze_impact` (card 44) pede
-    `ImpactAnalysisResult`. Um `MagicMock` ingênuo único devolveria o
-    mesmo valor para todos, quebrando quem chamasse depois com um objeto
-    do tipo errado.
+    `ImpactAnalysisResult`, `compose_report` (card 45) pede `ComposedReport`.
+    Um `MagicMock` ingênuo único devolveria o mesmo valor para todos,
+    quebrando quem chamasse depois com um objeto do tipo errado.
 
     `impacts`/`risks`/`dependencies`/`recommended_tests` fixam a saída de
     `analyze_impact` (default: listas vazias — o node real roda, só não
     produz nada, preservando o comportamento que os testes anteriores
-    esperavam do stub).
+    esperavam do stub). `requirement_summary`/`executive_summary` fixam a
+    saída de `compose_report`.
     """
     fake_requirement = Requirement(
         text=requirement_text, feature_type=feature_type, search_terms=search_terms or []
@@ -48,6 +57,12 @@ def mock_llm(
         dependencies=dependencies or [],
         recommended_tests=recommended_tests or [],
     )
+    fake_report = ComposedReport(
+        requirement_summary=requirement_summary
+        if requirement_summary is not None
+        else requirement_text,
+        executive_summary=executive_summary,
+    )
 
     def _with_structured_output(schema, *_args, **_kwargs):
         result = MagicMock()
@@ -57,6 +72,8 @@ def mock_llm(
             result.invoke.return_value = fake_verdict
         elif schema is ImpactAnalysisResult:
             result.invoke.return_value = fake_analysis
+        elif schema is ComposedReport:
+            result.invoke.return_value = fake_report
         else:
             raise AssertionError(f"schema inesperado em with_structured_output: {schema}")
         return result
