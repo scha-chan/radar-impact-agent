@@ -9,12 +9,16 @@ export type AnalysisStatus = "published" | "blocked" | "pending_approval" | "arc
 
 export interface AnalyzeRequest {
   text: string;
+  /** card 43: owner/repo ou URL; vazio usa o GITHUB_REPO do servidor. */
+  repo?: string;
   issue_number?: number;
 }
 
 export interface AnalyzeResponse {
   session_id: string;
   status: AnalysisStatus;
+  /** card 43: repositório de fato analisado. */
+  github_repo: string | null;
   risk_level: string | null;
   /** false → escalou sem avaliação (card 46); a tela mostra "não avaliado". */
   risk_assessed: boolean;

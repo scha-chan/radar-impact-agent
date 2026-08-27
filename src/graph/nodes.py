@@ -73,6 +73,12 @@ _PROBABILITY_BY_NAME = {p.name: p for p in Probability}
 _RISK_LEVEL_NAME = {level: level.name for level in RiskLevel}
 
 
+def _effective_github_repo(state: AgentState) -> str:
+    """Repositório-alvo da execução: o informado na interface (card 43,
+    `state["github_repo"]`) ou, se não houver, o `GITHUB_REPO` do ambiente."""
+    return state.get("github_repo") or os.getenv("GITHUB_REPO", "")
+
+
 def _set_gen_ai_span_attributes() -> None:
     """RF-09.6: convenções semânticas GenAI da OpenTelemetry no span do
     node atual (aberto por `graph/tracing.py::trace_node`, um por node,
@@ -224,7 +230,7 @@ def search_codebase(state: AgentState) -> dict:
         state,
         lambda: search_code(
             search_terms,
-            repo=os.getenv("GITHUB_REPO", ""),
+            repo=_effective_github_repo(state),
             github_token=os.getenv("GITHUB_TOKEN", ""),
             failures=failures,
         ),
@@ -272,7 +278,7 @@ def fetch_history(state: AgentState) -> dict:
         state,
         lambda: _fetch_history(
             search_terms,
-            repo=os.getenv("GITHUB_REPO", ""),
+            repo=_effective_github_repo(state),
             github_token=os.getenv("GITHUB_TOKEN", ""),
             failures=failures,
         ),
@@ -814,7 +820,7 @@ def publish_comment(state: AgentState) -> dict:
             state,
             lambda: _publish_comment(
                 state,
-                repo=os.getenv("GITHUB_REPO", ""),
+                repo=_effective_github_repo(state),
                 github_token=os.getenv("GITHUB_TOKEN", ""),
                 dry_run=dry_run,
                 body=body,

@@ -88,6 +88,43 @@ def test_analyze_publishes_automatically_with_strong_evidence(tmp_path, monkeypa
     assert body["human_review_required"] is False
 
 
+# --- card 43: repositório informado por execução ----------------------------
+
+
+def test_analyze_normalizes_and_echoes_the_repo_from_the_request(tmp_path, monkeypatch):
+    _mock_low_confidence(monkeypatch)
+    monkeypatch.setenv("GITHUB_REPO", "env-owner/env-repo")
+    monkeypatch.chdir(tmp_path)
+
+    with TestClient(app) as client:
+        body = client.post(
+            "/analyze",
+            json={"text": "Adicionar algo qualquer", "repo": "https://github.com/foo/bar"},
+        ).json()
+
+    # URL normalizada para owner/repo, sobrepondo o do ambiente.
+    assert body["github_repo"] == "foo/bar"
+
+
+def test_analyze_falls_back_to_env_repo_when_request_omits_it(tmp_path, monkeypatch):
+    _mock_low_confidence(monkeypatch)
+    monkeypatch.setenv("GITHUB_REPO", "env-owner/env-repo")
+    monkeypatch.chdir(tmp_path)
+
+    with TestClient(app) as client:
+        body = client.post("/analyze", json={"text": "Adicionar algo qualquer"}).json()
+
+    assert body["github_repo"] == "env-owner/env-repo"
+
+
+def test_analyze_rejects_an_unrecognized_repo(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with TestClient(app) as client:
+        response = client.post("/analyze", json={"text": "Adicionar algo", "repo": "não é um repo"})
+
+    assert response.status_code == 422
+
+
 def test_analyze_blocks_adversarial_input(tmp_path, monkeypatch):
     _mock_adversarial(monkeypatch)
     monkeypatch.chdir(tmp_path)

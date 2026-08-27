@@ -298,7 +298,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`.env` é carregado automaticamente na importação (`src/config.py`) — não precisa exportar as variáveis manualmente no shell. Para a tool `search_code` funcionar (card 08), preencha `GITHUB_TOKEN` com um [personal access token](https://github.com/settings/tokens) com escopo mínimo de leitura de código, e `GITHUB_REPO` com `owner/repo`. Sem essas duas variáveis, `search_codebase` degrada para lista vazia em vez de falhar. Para o LLM, é necessário o Ollama rodando com o modelo configurado em `LLM_MODEL` (padrão `mistral`) baixado:
+`.env` é carregado automaticamente na importação (`src/config.py`) — não precisa exportar as variáveis manualmente no shell. Para a tool `search_code` funcionar (card 08), preencha `GITHUB_TOKEN` com um [personal access token](https://github.com/settings/tokens) com escopo mínimo de leitura de código, e `GITHUB_REPO` com `owner/repo` — este é o **repositório padrão**; a página (`POST /analyze`, campo `repo`, card 43) aceita `owner/repo` ou a URL de outro repositório por análise, para testar fontes diferentes (o `GITHUB_TOKEN` precisa ter acesso a ele). Sem `GITHUB_TOKEN` e sem nenhum repositório, `search_codebase` degrada para lista vazia em vez de falhar. Para o LLM, é necessário o Ollama rodando com o modelo configurado em `LLM_MODEL` (padrão `mistral`) baixado:
 
 ```bash
 ollama serve            # em um terminal separado, se ainda não estiver rodando
@@ -333,7 +333,7 @@ Sobe a API (`http://localhost:8000`) e o n8n (`http://localhost:5678`). O Ollama
 uvicorn src.api.app:app --reload
 ```
 
-Abra `http://localhost:8000` — página única (card 30, RF-10) para submeter um requisito, ver o painel de aprovações pendentes e inspecionar a trilha de auditoria de uma sessão. Endpoints: `POST /analyze` (RF-01.2), `GET /approvals`/`POST /approvals/{session_id}` (RF-07.2), `GET /audit/{session_id}` (RF-09.4). Documentação interativa automática do FastAPI em `/docs`.
+Abra `http://localhost:8000` — página única (card 30, RF-10) para submeter um requisito (com um campo opcional para o repositório do GitHub a analisar, card 43), ver o painel de aprovações pendentes e inspecionar a trilha de auditoria de uma sessão. Endpoints: `POST /analyze` (RF-01.2), `GET /approvals`/`GET`/`POST /approvals/{session_id}` (RF-07.2), `GET /audit/{session_id}` (RF-09.4). Documentação interativa automática do FastAPI em `/docs`.
 
 **Frontend (TypeScript + Tailwind).** A lógica da página (`src/api/static/ts/*.ts` — `types.ts`, `api.ts`, `dom.ts`, `app.ts`) é escrita em TypeScript e compilada para `src/api/static/js/` (servido em `/static`), sem bundler — cada arquivo é um módulo ES nativo carregado pelo navegador. Estilo via Tailwind (CDN, paleta `rose`), sem CSS próprio. Depois de editar um `.ts`:
 

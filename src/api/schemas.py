@@ -7,23 +7,35 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from src.graph.github_repo import normalize_github_repo
 from src.graph.state import EvidenceSource, Impact, Risk
 
 AnalysisStatus = Literal["published", "blocked", "pending_approval", "archived"]
 
 
 class AnalyzeRequest(BaseModel):
-    """RF-01.2/RF-01.4: texto livre, 1 a 8000 caracteres."""
+    """RF-01.2/RF-01.4: texto livre, 1 a 8000 caracteres. `repo` (card 43):
+    `owner/repo` ou a URL do repositório para analisar uma fonte diferente
+    do `GITHUB_REPO` do ambiente; vazio -> usa o do ambiente."""
 
     text: str = Field(min_length=1, max_length=8000)
+    repo: str | None = Field(default=None, max_length=256)
     issue_number: int | None = None
+
+    @field_validator("repo")
+    @classmethod
+    def _normalize_repo(cls, value: str | None) -> str | None:
+        return normalize_github_repo(value)
 
 
 class AnalyzeResponse(BaseModel):
     session_id: str
     status: AnalysisStatus
+    # repositório de fato analisado (card 43): o informado na interface ou
+    # o `GITHUB_REPO` do ambiente. None se nenhum estiver configurado.
+    github_repo: str | None
     risk_level: str | None
     # False quando o parecer escalou sem impacto/risco identificado (card 46):
     # `risk_level` traz o piso MEDIUM, mas a tela mostra "não avaliado".
