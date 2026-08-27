@@ -1,11 +1,15 @@
 /**
  * Lógica da interface mínima (card 30). Só orquestra: pega input do DOM,
- * chama `api.ts` (tipado contra `types.ts`), renderiza a resposta via
- * `dom.ts` (sem `innerHTML` com dado externo — ver `dom.ts`).
+ * chama a API pelo `RadarApiClient` (única porta de saída, `service/`),
+ * renderiza via `dom.ts` (sem `innerHTML` com dado externo). Padrões de
+ * tela que se repetem (pegar elemento, mensagem de erro, botão ocupado,
+ * faixa de mensagem) ficam em `service/util-service.ts`.
  */
-import { analyzeRequirement, ApiError, getAuditTrail, getEscalationDetail, listPendingApprovals, submitApprovalDecision } from "./api.js";
 import { clear, el, text } from "./dom.js";
-import { formatTimestamp, riskDisplayClass, riskDisplayLabel, translateDecision, translateRiskLevel } from "./i18n.js";
+import { formatTimestamp, riskDisplayClass, riskDisplayLabel, translateDecision, translateRiskLevel, } from "./i18n.js";
+import { RadarApiClient } from "./service/radar-api-client.js";
+import { MessageBox, UtilService } from "./service/util-service.js";
+const api = new RadarApiClient();
 const STATUS_STYLES = {
     published: "bg-rose-100 text-rose-800 border border-rose-200",
     pending_approval: "bg-amber-100 text-amber-800 border border-amber-200",
@@ -21,23 +25,8 @@ const STATUS_LABELS = {
 function statusBadge(status) {
     return el("span", { class: `inline-block rounded-full px-3 py-1 text-xs font-semibold ${STATUS_STYLES[status]}` }, [text(STATUS_LABELS[status])]);
 }
-function showMessage(message, tone = "info") {
-    const box = document.querySelector("#message-box");
-    if (!box)
-        return;
-    const toneClass = tone === "error"
-        ? "bg-red-50 text-red-800 border border-red-200"
-        : "bg-rose-50 text-rose-800 border border-rose-200";
-    clear(box);
-    box.className = `rounded-lg px-4 py-3 text-sm ${toneClass}`;
-    box.append(text(message));
-    box.classList.remove("hidden");
-}
-function hideMessage() {
-    document.querySelector("#message-box")?.classList.add("hidden");
-}
 function renderAnalyzeResult(result) {
-    const container = document.querySelector("#analyze-result");
+    const container = UtilService.byId("analyze-result");
     if (!container)
         return;
     clear(container);
@@ -63,40 +52,39 @@ function renderAnalyzeResult(result) {
     ]);
     container.append(header, dl);
     if (result.published_comment_url) {
-        container.append(el("a", { href: result.published_comment_url, class: "mt-3 inline-block text-sm text-rose-700 underline" }, [
-            text("Ver comentário publicado"),
-        ]));
+        container.append(el("a", {
+            href: result.published_comment_url,
+            class: "mt-3 inline-block text-sm text-rose-700 underline",
+        }, [text("Ver comentário publicado")]));
     }
     if (result.status === "pending_approval")
         void refreshApprovals();
 }
 async function handleAnalyzeSubmit(event) {
     event.preventDefault();
-    hideMessage();
-    const textInput = document.querySelector("#text");
-    const issueInput = document.querySelector("#issue_number");
-    const submitButton = document.querySelector("#analyze-submit");
-    if (!textInput || !issueInput)
+    MessageBox.hide();
+    const textInput = UtilService.byId("text");
+    const issueInput = UtilService.byId("issue_number");
+    const submitButton = UtilService.byId("analyze-submit");
+    if (!textInput || !issueInput || !submitButton)
         return;
     const payload = {
         text: textInput.value,
         ...(issueInput.value ? { issue_number: Number(issueInput.value) } : {}),
     };
-    submitButton?.setAttribute("disabled", "true");
     try {
-        const result = await analyzeRequirement(payload);
+        const result = await UtilService.busy(submitButton, () => api.analyze(payload));
         renderAnalyzeResult(result);
     }
     catch (error) {
-        showMessage(error instanceof ApiError ? error.message : "Erro inesperado ao analisar.", "error");
-    }
-    finally {
-        submitButton?.removeAttribute("disabled");
+        MessageBox.show(UtilService.errorMessage(error, "Erro inesperado ao analisar."), "error");
     }
 }
 function bulletList(title, items) {
     return el("div", { class: "mt-2" }, [
-        el("p", { class: "text-xs font-semibold uppercase tracking-wide text-stone-500" }, [text(title)]),
+        el("p", { class: "text-xs font-semibold uppercase tracking-wide text-stone-500" }, [
+            text(title),
+        ]),
         items.length === 0
             ? el("p", { class: "text-sm text-stone-400" }, [text("—")])
             : el("ul", { class: "ml-4 list-disc text-sm text-stone-700" }, items.map((line) => el("li", {}, [text(line)]))),
@@ -109,7 +97,8 @@ function renderEscalationDetail(detail) {
         ]),
         bulletList("O que faltou", detail.gaps),
         bulletList("Impactos", detail.impacts.map((i) => `[${i.severity}] ${i.area}: ${i.description} (evidência: ${i.evidence})`)),
-        bulletList("Riscos", detail.risks.map((r) => `[${r.severity}/${r.probability}] ${r.description}${r.mitigation ? ` — mitigação: ${r.mitigation}` : ""}`)),
+        bulletList("Riscos", detail.risks.map((r) => `[${r.severity}/${r.probability}] ${r.description}` +
+            (r.mitigation ? ` — mitigação: ${r.mitigation}` : ""))),
         bulletList("Dependências", detail.dependencies),
         bulletList("Testes recomendados", detail.recommended_tests),
         bulletList("Evidência coletada", detail.evidence_sources.map((e) => `[${e.type}] ${e.ref}`)),
@@ -136,28 +125,28 @@ function pendingApprovalCard(item) {
         resultBox.textContent = msg;
     };
     const act = (button, label, decision) => async () => {
-        hideMessage();
+        MessageBox.hide();
         showResult("processando…", true);
         setBusy(true, button, label);
         try {
             const result = decision === "REANALYZE"
-                ? await submitApprovalDecision(item.session_id, decision, contextInput.value)
-                : await submitApprovalDecision(item.session_id, decision);
+                ? await api.submitApprovalDecision(item.session_id, decision, contextInput.value)
+                : await api.submitApprovalDecision(item.session_id, decision);
             const done = decision === "REANALYZE" && result.status === "pending_approval"
                 ? "Reanálise concluída — parecer atualizado, ainda aguardando decisão."
                 : `Sessão ${result.session_id}: ${STATUS_LABELS[result.status]}.`;
             // O card some/recarrega no refresh; a mensagem no topo persiste.
             showResult(done, true);
-            showMessage(done);
+            MessageBox.show(done);
             contextInput.value = "";
             detailSlot.replaceChildren();
             await refreshApprovals();
         }
         catch (error) {
-            const msg = error instanceof ApiError ? error.message : "Erro inesperado ao decidir.";
+            const msg = UtilService.errorMessage(error, "Erro inesperado ao decidir.");
             showResult(msg, false);
-            showMessage(msg, "error");
-            if (error instanceof ApiError && error.status === 404)
+            MessageBox.show(msg, "error");
+            if (UtilService.isNotFound(error))
                 await refreshApprovals();
         }
         finally {
@@ -182,11 +171,11 @@ function pendingApprovalCard(item) {
             }
             detailButton.disabled = true;
             try {
-                const detail = await getEscalationDetail(item.session_id);
+                const detail = await api.getEscalationDetail(item.session_id);
                 detailSlot.replaceChildren(renderEscalationDetail(detail));
             }
             catch (error) {
-                showResult(error instanceof ApiError ? error.message : "Erro ao carregar detalhe.", false);
+                showResult(UtilService.errorMessage(error, "Erro ao carregar detalhe."), false);
             }
             finally {
                 detailButton.disabled = false;
@@ -201,7 +190,9 @@ function pendingApprovalCard(item) {
         el("p", { class: "mt-1 text-sm text-stone-600" }, [
             text(`risco: ${riskDisplayLabel(item.risk_level, item.risk_assessed)} · confiança: ${item.confidence ?? "—"} (threshold: ${item.threshold ?? "—"})`),
         ]),
-        el("p", { class: "mt-1 text-xs text-stone-400" }, [text(`escalado em ${formatTimestamp(item.escalated_at)}`)]),
+        el("p", { class: "mt-1 text-xs text-stone-400" }, [
+            text(`escalado em ${formatTimestamp(item.escalated_at)}`),
+        ]),
         detailSlot,
         contextInput,
         el("div", { class: "mt-3 flex gap-2" }, [approveButton, rejectButton, reanalyzeButton]),
@@ -209,13 +200,12 @@ function pendingApprovalCard(item) {
     ]);
 }
 async function refreshApprovals() {
-    const container = document.querySelector("#approvals-list");
+    const container = UtilService.byId("approvals-list");
     if (!container)
         return;
-    clear(container);
-    container.append(el("p", { class: "text-sm text-stone-400" }, [text("Carregando...")]));
+    UtilService.loading(container);
     try {
-        const items = await listPendingApprovals();
+        const items = await api.listPendingApprovals();
         clear(container);
         if (items.length === 0) {
             container.append(el("p", { class: "text-sm text-stone-400" }, [text("Nenhuma aprovação pendente.")]));
@@ -225,7 +215,7 @@ async function refreshApprovals() {
     }
     catch (error) {
         clear(container);
-        showMessage(error instanceof ApiError ? error.message : "Erro ao carregar aprovações.", "error");
+        MessageBox.show(UtilService.errorMessage(error, "Erro ao carregar aprovações."), "error");
     }
 }
 function auditRow(entry) {
@@ -240,9 +230,9 @@ function auditRow(entry) {
     ]);
 }
 async function handleLoadAudit() {
-    hideMessage();
-    const input = document.querySelector("#audit-session-id");
-    const container = document.querySelector("#audit-result");
+    MessageBox.hide();
+    const input = UtilService.byId("audit-session-id");
+    const container = UtilService.byId("audit-result");
     if (!input || !container)
         return;
     const sessionId = input.value.trim();
@@ -250,7 +240,7 @@ async function handleLoadAudit() {
         return;
     clear(container);
     try {
-        const entries = await getAuditTrail(sessionId);
+        const entries = await api.getAuditTrail(sessionId);
         const table = el("table", { class: "w-full border-collapse text-sm" }, [
             el("thead", {}, [
                 el("tr", { class: "text-left text-stone-500" }, [
@@ -267,18 +257,20 @@ async function handleLoadAudit() {
         container.append(table);
     }
     catch (error) {
-        if (error instanceof ApiError && error.status === 404) {
-            container.append(el("p", { class: "text-sm text-stone-400" }, [text("Nenhuma auditoria encontrada para essa sessão.")]));
+        if (UtilService.isNotFound(error)) {
+            container.append(el("p", { class: "text-sm text-stone-400" }, [
+                text("Nenhuma auditoria encontrada para essa sessão."),
+            ]));
         }
         else {
-            showMessage(error instanceof ApiError ? error.message : "Erro ao carregar auditoria.", "error");
+            MessageBox.show(UtilService.errorMessage(error, "Erro ao carregar auditoria."), "error");
         }
     }
 }
 function init() {
-    document.querySelector("#analyze-form")?.addEventListener("submit", (event) => void handleAnalyzeSubmit(event));
-    document.querySelector("#refresh-approvals")?.addEventListener("click", () => void refreshApprovals());
-    document.querySelector("#load-audit")?.addEventListener("click", () => void handleLoadAudit());
+    UtilService.byId("analyze-form")?.addEventListener("submit", (event) => void handleAnalyzeSubmit(event));
+    UtilService.byId("refresh-approvals")?.addEventListener("click", () => void refreshApprovals());
+    UtilService.byId("load-audit")?.addEventListener("click", () => void handleLoadAudit());
 }
 document.addEventListener("DOMContentLoaded", init);
 //# sourceMappingURL=app.js.map
