@@ -10,11 +10,29 @@ para validacao.
 from __future__ import annotations
 
 import operator
+import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, Literal, TypedDict
 
 from pydantic import BaseModel, Field
+
+from src import config  # noqa: F401 - carrega .env como efeito colateral do import
+
+# RF-06.5: orcamento de execucao — nenhuma execucao roda indefinidamente.
+# Estourar qualquer um forca human_review_required=true e risk_level
+# minimo MEDIUM (decide_autonomy, graph/nodes.py), nunca deixando o
+# requisito passar como se tivesse sido totalmente analisado.
+MAX_STEPS_DEFAULT = int(os.getenv("MAX_STEPS", "12"))
+MAX_WALL_TIME_SECONDS = int(os.getenv("MAX_WALL_TIME_SECONDS", "60"))
+
+# RF-09.5: versao fixa gravada no state na criacao da execucao — spans,
+# logs e auditoria leem daqui, nao de uma constante global direto, para a
+# versao registrada ser a que estava em vigor quando a execucao comecou
+# mesmo que o processo seja atualizado com a execucao ja em andamento.
+AGENT_VERSION = os.getenv("AGENT_VERSION", "0.1.0")
+PROMPT_VERSION = os.getenv("PROMPT_VERSION", "1")
+POLICY_VERSION = os.getenv("POLICY_VERSION", "1")
 
 FeatureType = Literal[
     "login",
@@ -118,6 +136,20 @@ class AgentState(TypedDict):
     correlation_id: str
     issue_number: int | None
 
+    # versionamento (RF-09.5) — atributo fixo propagado a log, span e auditoria
+    agent_version: str
+    prompt_version: str
+    policy_version: str
+
+    # orcamento de execucao (RF-06.5) — steps_taken usa operator.add porque
+    # os tres nodes de evidencia rodam em paralelo (fan-out via Send) e cada
+    # um contribui +1 (graph/build.py::count_step); sem o reducer de soma,
+    # LangGraph rejeitaria a escrita concorrente na mesma chave (mesmo
+    # motivo de evidence_sources/tools_failed, abaixo).
+    steps_taken: Annotated[int, operator.add]
+    max_steps: int
+    started_at: datetime
+
     # entrada
     raw_requirement: str
     requirement: Requirement | None
@@ -165,18 +197,27 @@ def create_initial_state(
     *,
     issue_number: int | None = None,
     max_retries: int = 2,
+    max_steps: int = MAX_STEPS_DEFAULT,
 ) -> AgentState:
     """Monta o estado inicial do grafo a partir de um requisito bruto.
 
     `session_id` e `correlation_id` compartilham o mesmo valor para permitir
     correlacionar logs, trilha de auditoria e trace de uma mesma execucao
-    (secao 14 do PRD).
+    (secao 14 do PRD). `max_steps` e parametro (e nao so o default do
+    ambiente) para os testes do orcamento de execucao (RF-06.5, card 35)
+    forcarem o estouro sem depender de mocks lentos.
     """
     session_id = uuid.uuid4().hex[:8]
     return AgentState(
         session_id=session_id,
         correlation_id=session_id,
         issue_number=issue_number,
+        agent_version=AGENT_VERSION,
+        prompt_version=PROMPT_VERSION,
+        policy_version=POLICY_VERSION,
+        steps_taken=0,
+        max_steps=max_steps,
+        started_at=datetime.now(timezone.utc),
         raw_requirement=raw_requirement,
         requirement=None,
         is_adversarial=False,

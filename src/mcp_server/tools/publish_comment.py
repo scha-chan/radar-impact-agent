@@ -21,6 +21,7 @@ import httpx
 from src import config  # noqa: F401 - carrega .env como efeito colateral do import
 from src.governance.permissions import ToolPermission, authorize
 from src.graph.state import AgentState
+from src.mcp_server.tools._http import traceparent_headers
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ def _publish_via_github_api(
         "Authorization": f"Bearer {github_token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
+        **traceparent_headers(),
     }
 
     try:

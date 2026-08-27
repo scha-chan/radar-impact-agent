@@ -167,7 +167,7 @@ sozinho ou se uma ação irreversível é autorizada.
 Todos os nodes são instrumentados uniformemente com logs estruturados
 (`src/observability/logging.py`, card 19) e decisões de autonomia são
 registradas na trilha de auditoria (`src/observability/audit.py`, card 20) —
-ver [Observabilidade](#observabilidade-os-dois-sinais-e-uma-investigação-real) abaixo.
+ver [Observabilidade](#observabilidade-os-três-sinais-e-uma-investigação-real) abaixo.
 
 ### Stack
 
@@ -348,9 +348,9 @@ print(resultado["requirement"].feature_type, resultado["risk_level"], resultado[
 
 `extract_requirement`, `search_codebase`, `fetch_history`, `retrieve_rag`, `guard_adversarial` e `publish_comment` já são reais; só `analyze_impact` (o LLM que classifica impactos/riscos a partir da evidência) ainda é stub. Sem `GITHUB_TOKEN`/`GITHUB_REPO` configurados, sem o modelo de embedding baixado, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado, a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — degradação esperada (seção 11 do PRD), não uma falha.
 
-### Observabilidade: os dois sinais e uma investigação real
+### Observabilidade: os três sinais e uma investigação real
 
-Toda execução emite dois sinais correlacionados pelo mesmo `session_id` (seção 14 do PRD):
+Toda execução emite três sinais correlacionados pelo mesmo `session_id`/`correlation_id` (seção 14 do PRD):
 
 - **Log estruturado (JSON)** — um evento `node_completed` por node, com `status` e `duration_ms`. Ligar o renderer JSON de verdade:
 
@@ -359,9 +359,19 @@ Toda execução emite dois sinais correlacionados pelo mesmo `session_id` (seç�
   configure_structured_logging()
   ```
 
-- **Trilha de auditoria (JSONL)** — um registro por decisão de autonomia (`ESCALATED`, `AUTO_PUBLISHED`, `APPROVED_PUBLISHED`, `BLOCKED_ADVERSARIAL`, `REJECTED_ARCHIVED`, `EXPIRED_ARCHIVED`, `PUBLISH_DENIED`), gravado em `AUDIT_LOG_PATH` (padrão `audit/trail.jsonl`). O painel `GET /approvals` da interface mínima deriva desse mesmo arquivo.
+- **Trilha de auditoria (JSONL)** — um registro por decisão de autonomia (`ESCALATED`, `ESCALATED_BUDGET_EXCEEDED`, `AUTO_PUBLISHED`, `APPROVED_PUBLISHED`, `BLOCKED_ADVERSARIAL`, `REJECTED_ARCHIVED`, `EXPIRED_ARCHIVED`, `PUBLISH_DENIED`), gravado em `AUDIT_LOG_PATH` (padrão `audit/trail.jsonl`). O painel `GET /approvals` da interface mínima deriva desse mesmo arquivo.
 
-Uma execução real reconstruída — linha do tempo dos nove nodes com latência de cada um, a decisão de autonomia tomada e a evidência que a sustentou, com os dois sinais correlacionados por `session_id` — está documentada em [`docs/evidencias/card-21-investigacao-execucao-real.md`](docs/evidencias/card-21-investigacao-execucao-real.md).
+- **Trace OpenTelemetry (card 35)** — um span por node (RF-09.2), seguindo as convenções semânticas GenAI (`gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.tool.name`, RF-09.6) nos nodes que chamam LLM ou tool. Todo span carrega `agent.version`/`prompt.version`/`policy.version` fixos (RF-09.5) — sem eles, uma regressão de comportamento não seria rastreável até a versão que a causou. A chamada HTTP de saída das tools (`search_code`/`fetch_history`/`publish_comment`) propaga o contexto do span corrente via W3C Trace Context (header `traceparent`, RF-09.6). Desligado por padrão (`OTEL_CONSOLE_EXPORT=false`); ligar o exporter de console:
+
+  ```bash
+  OTEL_CONSOLE_EXPORT=true python -m src.api.app
+  ```
+
+Uma execução real reconstruída — linha do tempo dos nove nodes com latência de cada um, a decisão de autonomia tomada e a evidência que a sustentou, com os sinais correlacionados por `session_id` — está documentada em [`docs/evidencias/card-21-investigacao-execucao-real.md`](docs/evidencias/card-21-investigacao-execucao-real.md) (os dois primeiros sinais; o trace é posterior, card 35).
+
+### Orçamento de execução (RF-06.5, card 35)
+
+Nenhuma execução roda indefinidamente. `AgentState.steps_taken`/`max_steps` (padrão 12) e o relógio de parede (`MAX_WALL_TIME_SECONDS`, padrão 60s) são checados em `budget_gate` — entre o fan-in de evidência e `analyze_impact` — e de novo em `decide_autonomy` (rede de segurança para o caso do orçamento estourar já dentro de `analyze_impact`/`score_risk`). Estourar qualquer um força `human_review_required=true` e `risk_level` mínimo `MEDIUM` (nunca rebaixa um risco já mais grave), pulando `analyze_impact`/`score_risk` de propósito — o requisito nunca é publicado como se tivesse sido totalmente analisado. A auditoria registra `ESCALATED_BUDGET_EXCEEDED` com `steps_taken`/`max_steps`/`duration_seconds`. Detalhes e decisões de arquitetura em [`docs/evidencias/card-35-orcamento-execucao-versionamento-spans.md`](docs/evidencias/card-35-orcamento-execucao-versionamento-spans.md).
 
 ### Servidor MCP
 
@@ -447,4 +457,4 @@ Adaptado da seção 25 do PRD:
 - Sem controle de acesso — qualquer pessoa com acesso ao painel pode aprovar (RF-10 não inclui autenticação).
 - `analyze_impact` (classificação real de impactos/riscos por LLM) permanece stub — `impacts`/`risks` ficam vazios em execuções reais até essa peça existir; os cenários 2/3 dos testes mockam essa saída para exercitar o resto do pipeline.
 
-**Evolução futura:** análise de dependências via AST para substituir a busca textual; calibração de probabilidade com incidentes reais; autenticação e papéis no fluxo de aprovação; suporte a Jira/Azure DevOps além do GitHub. Técnicas adicionais ensinadas no módulo (orçamento de execução, mutation testing, testes por propriedade, avaliação LLM-as-judge, Isolation Forest, classificador calibrado) estão especificadas na seção 21 do PRD (cards 35–41) como extensão pós-rubrica — risco de pendência aceito conscientemente (seção 23 do PRD), não fazem parte dos 34 cards centrais que este README documenta.
+**Evolução futura:** análise de dependências via AST para substituir a busca textual; calibração de probabilidade com incidentes reais; autenticação e papéis no fluxo de aprovação; suporte a Jira/Azure DevOps além do GitHub. Técnicas adicionais ensinadas no módulo (mutation testing, testes por propriedade, avaliação LLM-as-judge, Isolation Forest, classificador calibrado) estão especificadas na seção 21 do PRD (cards 36–41) como extensão pós-rubrica — risco de pendência aceito conscientemente (seção 23 do PRD), não fazem parte dos 34 cards centrais que este README documenta. Orçamento de execução e versionamento em spans (card 35, mesma extensão) já foram implementados — ver [Observabilidade](#observabilidade-os-três-sinais-e-uma-investigação-real) e [Orçamento de execução](#orçamento-de-execução-rf-065-card-35) acima.

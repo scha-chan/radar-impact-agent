@@ -23,6 +23,7 @@ from src import config  # noqa: F401 - carrega .env como efeito colateral do imp
 AuditDecision = Literal[
     "AUTO_PUBLISHED",
     "ESCALATED",
+    "ESCALATED_BUDGET_EXCEEDED",
     "BLOCKED_ADVERSARIAL",
     "APPROVED_PUBLISHED",
     "REJECTED_ARCHIVED",
@@ -43,6 +44,12 @@ class AuditRecord:
     threshold: int | None = None
     tool_authorized: str | None = None
     reason: str | None = None
+    # RF-06.5/cenário 5: só preenchidos quando `decision` é
+    # ESCALATED_BUDGET_EXCEEDED — "auditoria registra... com
+    # steps_taken/max_steps e a duração real".
+    steps_taken: int | None = None
+    max_steps: int | None = None
+    duration_seconds: float | None = None
 
     def to_dict(self) -> dict:
         payload = {
@@ -57,6 +64,12 @@ class AuditRecord:
         }
         if self.reason is not None:
             payload["reason"] = self.reason
+        if self.steps_taken is not None:
+            payload["steps_taken"] = self.steps_taken
+        if self.max_steps is not None:
+            payload["max_steps"] = self.max_steps
+        if self.duration_seconds is not None:
+            payload["duration_seconds"] = self.duration_seconds
         return payload
 
 
@@ -95,15 +108,20 @@ def read_audit_trail(session_id: str, *, path: str | None = None) -> list[dict]:
     return [entry for entry in read_all_entries(path=path) if entry.get("session_id") == session_id]
 
 
+_PENDING_DECISIONS = {"ESCALATED", "ESCALATED_BUDGET_EXCEEDED"}
+
+
 def list_pending_sessions(*, path: str | None = None) -> list[dict]:
     """RF-10.2 (card 30): sessões aguardando aprovação — a última decisão
-    registrada para a sessão é `ESCALATED`, sem nenhuma resolução
-    (`APPROVED_PUBLISHED`/`REJECTED_ARCHIVED`/`EXPIRED_ARCHIVED`/
-    `PUBLISH_DENIED`) depois dela. Deriva do sinal 2 de observabilidade já
-    existente (card 20) em vez de manter um registro de "pendentes" à
-    parte — a trilha de auditoria já é a fonte de verdade de qual foi a
-    última decisão de cada sessão."""
+    registrada para a sessão é `ESCALATED` ou `ESCALATED_BUDGET_EXCEEDED`
+    (card 35), sem nenhuma resolução (`APPROVED_PUBLISHED`/
+    `REJECTED_ARCHIVED`/`EXPIRED_ARCHIVED`/`PUBLISH_DENIED`) depois dela.
+    Deriva do sinal 2 de observabilidade já existente (card 20) em vez de
+    manter um registro de "pendentes" à parte — a trilha de auditoria já é
+    a fonte de verdade de qual foi a última decisão de cada sessão."""
     last_entry_by_session: dict[str, dict] = {}
     for entry in read_all_entries(path=path):
         last_entry_by_session[entry["session_id"]] = entry
-    return [entry for entry in last_entry_by_session.values() if entry["decision"] == "ESCALATED"]
+    return [
+        entry for entry in last_entry_by_session.values() if entry["decision"] in _PENDING_DECISIONS
+    ]
