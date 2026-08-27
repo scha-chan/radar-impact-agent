@@ -29,3 +29,9 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_tool_executor.py",
 ]
 use_git_change_detection = false
+# [tool.pytest.ini_options].addopts (acima) aplica --cov-fail-under=70 a
+# toda chamada de pytest, inclusive a do mutmut — que roda só os quatro
+# arquivos de teste acima, muito abaixo de 70% do src/ inteiro. --no-cov
+# desliga a coleta de cobertura (pytest-cov) só para essas chamadas, sem
+# tocar no addopts real usado pela suíte completa.
+pytest_add_cli_args = ["--no-cov"]
