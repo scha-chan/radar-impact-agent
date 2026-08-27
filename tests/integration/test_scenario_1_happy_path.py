@@ -81,8 +81,8 @@ def test_scenario_1_high_confidence_evidence_publishes_automatically(tmp_path, m
     # fórmula de confiança se aplica (requisito >= 15 palavras, código
     # encontrado, feature_type != "outro", padrão RAG encontrado, nenhuma
     # tool falhou, 3 fontes distintas em evidence_sources, sem riscos sem
-    # mitigação porque analyze_impact — card 14 do LLM — ainda não gera
-    # riscos, então não há o que penalizar).
+    # mitigação porque a chamada de LLM de analyze_impact (card 44) está
+    # dublada sem riscos neste cenário, então não há o que penalizar).
     assert result["confidence"] == 100
     assert len(result["evidence_sources"]) == 3
     assert {source.type for source in result["evidence_sources"]} == {"code", "rag", "history"}

@@ -41,7 +41,8 @@ def render_comment(state: AgentState) -> str:
     Provisório: compõe a partir dos campos já disponíveis no state
     (risk_level, confidence, requirement). A composição definitiva a
     partir de `ImpactAnalysis` (prompt `04-compose-report`, seção 18 do
-    PRD) chega com `analyze_impact` no card 14.
+    PRD) — incluindo impacts/risks/dependencies/recommended_tests, que
+    `analyze_impact` já produz desde o card 44 — é o card 45.
     """
     requirement = state["requirement"]
     lines = [

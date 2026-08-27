@@ -111,6 +111,22 @@ class Risk(BaseModel):
     mitigation: str | None = None
 
 
+class ImpactAnalysisResult(BaseModel):
+    """Saida estruturada de `analyze_impact` (RF-04, card 44).
+
+    O LLM so classifica impactos/riscos/dependencias/testes a partir da
+    evidencia coletada — nunca calcula `risk_level` nem `confidence` (isso
+    e `score_risk`, Python puro, RF-05.4). E um recorte de `ImpactAnalysis`
+    (a saida final): so os quatro campos que o modelo produz, sem os campos
+    de identificacao/decisao/timestamp que o grafo preenche depois.
+    """
+
+    impacts: list[Impact] = Field(default_factory=list)
+    risks: list[Risk] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list)
+    recommended_tests: list[str] = Field(default_factory=list)
+
+
 class ImpactAnalysis(BaseModel):
     """Saida principal do RADAR, publicada como comentario na Issue de origem."""
 
