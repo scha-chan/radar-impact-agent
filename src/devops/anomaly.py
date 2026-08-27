@@ -19,31 +19,10 @@ from dataclasses import dataclass
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
-from src.devops.dataset import ExecutionRow
+from src.devops.dataset import ExecutionRow, to_feature_matrix
 
 DEFAULT_CONTAMINATION = 0.1
 DEFAULT_RANDOM_STATE = 42
-
-FEATURE_NAMES = [
-    "duration_ms",
-    "retries_used",
-    "confidence",
-    "tool_errors",
-    "evidence_sources_count",
-]
-
-
-def _to_feature_matrix(rows: list[ExecutionRow]) -> list[list[float]]:
-    return [
-        [
-            float(row.duration_ms),
-            float(row.retries_used),
-            float(row.confidence),
-            float(row.tool_errors),
-            float(row.evidence_sources_count),
-        ]
-        for row in rows
-    ]
 
 
 @dataclass(frozen=True)
@@ -62,7 +41,7 @@ def detect_anomalies(
     if not rows:
         return []
 
-    scaled = StandardScaler().fit_transform(_to_feature_matrix(rows))
+    scaled = StandardScaler().fit_transform(to_feature_matrix(rows))
     model = IsolationForest(contamination=contamination, random_state=random_state)
     predictions = model.fit_predict(scaled)  # -1 = outlier, 1 = inlier
     scores = model.score_samples(scaled)

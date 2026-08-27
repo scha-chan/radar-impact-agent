@@ -61,6 +61,19 @@ CSV_COLUMNS = [
     "human_review_required",
 ]
 
+# Features compartilhadas pelos dois modelos de ML (seção 16 do PRD:
+# Isolation Forest e HistGradientBoostingClassifier "treinado sobre o
+# mesmo dataset e as mesmas features") — `human_review_required` nunca
+# entra como feature de entrada, só como alvo de predição no classificador
+# (card 41) ou fora do escopo por completo (card 40, anomalia).
+FEATURE_NAMES = [
+    "duration_ms",
+    "retries_used",
+    "confidence",
+    "tool_errors",
+    "evidence_sources_count",
+]
+
 
 @dataclass(frozen=True)
 class ExecutionRow:
@@ -71,6 +84,19 @@ class ExecutionRow:
     tool_errors: int
     evidence_sources_count: int
     human_review_required: bool
+
+
+def to_feature_matrix(rows: list[ExecutionRow]) -> list[list[float]]:
+    return [
+        [
+            float(row.duration_ms),
+            float(row.retries_used),
+            float(row.confidence),
+            float(row.tool_errors),
+            float(row.evidence_sources_count),
+        ]
+        for row in rows
+    ]
 
 
 def _simulate_execution(index: int, rng: random.Random, *, degraded: bool) -> ExecutionRow:
