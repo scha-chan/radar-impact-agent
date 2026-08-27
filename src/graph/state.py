@@ -132,6 +132,20 @@ class ImpactAnalysisResult(BaseModel):
     recommended_tests: list[str] = Field(default_factory=list)
 
 
+class ReviewBrief(BaseModel):
+    """Saida do LLM em `05-review-brief` (card 49) — o resumo que o revisor
+    le no painel de aprovacoes pendentes.
+
+    `summary`: 2-3 frases (o que a mudanca pede, por que escalou, o que
+    esta incerto). `suggested_context`: 1-2 frases dizendo que informacao
+    destravaria uma reanalise (card 47). O modelo so redige; nao decide
+    nada.
+    """
+
+    summary: str
+    suggested_context: str
+
+
 class ComposedReport(BaseModel):
     """Saida do LLM em `04-compose-report` (card 45).
 
@@ -234,6 +248,9 @@ class AgentState(TypedDict):
     risk_assessed: bool
     confidence: int | None
     human_review_required: bool
+    # card 49: resumo gerado pela IA (node brief_escalation) do que a
+    # mudanca pede e por que escalou; mostrado no painel de aprovacoes.
+    review_brief: str | None
     approval_decision: ApprovalDecision | None
 
     # saida
@@ -289,6 +306,7 @@ def create_initial_state(
         risk_assessed=True,
         confidence=None,
         human_review_required=False,
+        review_brief=None,
         approval_decision=None,
         analysis=None,
         published_comment_url=None,

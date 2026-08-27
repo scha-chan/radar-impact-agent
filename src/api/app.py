@@ -31,6 +31,7 @@ from src.api.schemas import (
 from src.governance.adversarial import detect_by_pattern
 from src.graph.build import build_graph
 from src.graph.checkpointer import build_checkpointer
+from src.graph.escalation import describe_gaps, escalation_reason, last_escalation_decision
 from src.graph.state import MAX_REVIEW_ROUNDS, AgentState, create_initial_state
 from src.observability.audit import list_pending_sessions, read_audit_trail
 from src.observability.tracing import configure_tracing
@@ -97,9 +98,17 @@ def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     return _to_analyze_response(state["session_id"], result)
 
 
+def _review_brief_for(session_id: str) -> str | None:
+    """`review_brief` (card 49) do state congelado da sessão, se houver."""
+    snapshot = app.state.graph.get_state({"configurable": {"thread_id": session_id}})
+    return snapshot.values.get("review_brief") if snapshot.values else None
+
+
 @app.get("/approvals", response_model=list[PendingApproval])
 def list_approvals() -> list[PendingApproval]:
-    """RF-10.2: painel de pareceres aguardando aprovação."""
+    """RF-10.2: painel de pareceres aguardando aprovação. Cada item traz o
+    `review_brief` (card 49) — o resumo, gerado pela IA, do que a mudança
+    pede e por que escalou —, lido do state congelado no checkpointer."""
     return [
         PendingApproval(
             session_id=entry["session_id"],
@@ -108,16 +117,10 @@ def list_approvals() -> list[PendingApproval]:
             confidence=entry.get("confidence"),
             threshold=entry.get("threshold"),
             escalated_at=entry["timestamp"],
+            review_brief=_review_brief_for(entry["session_id"]),
         )
         for entry in list_pending_sessions()
     ]
-
-
-_ESCALATION_REASONS = {
-    "ESCALATED": "confiança abaixo do threshold ou risco crítico",
-    "ESCALATED_BUDGET_EXCEEDED": "orçamento de execução estourado",
-    "ESCALATED_NOT_ASSESSED": "análise não produziu impactos nem riscos (evidência insuficiente)",
-}
 
 
 def _pending_snapshot_or_404(session_id: str):
@@ -131,47 +134,34 @@ def _pending_snapshot_or_404(session_id: str):
     return config_dict, snapshot
 
 
-def _derive_gaps(values: dict, last_decision: str | None) -> list[str]:
-    gaps: list[str] = []
-    if not values.get("code_matches"):
-        gaps.append("Nenhuma evidência de código (busca no repositório vazia).")
-    if not values.get("impact_patterns"):
-        gaps.append("Nenhum padrão de impacto recuperado do RAG.")
-    if not values.get("change_history"):
-        gaps.append("Nenhum histórico de mudanças relacionado.")
-    if values.get("tools_failed"):
-        gaps.append(f"Ferramentas com falha: {', '.join(values['tools_failed'])}.")
-    if last_decision == "ESCALATED_BUDGET_EXCEEDED":
-        gaps.append("Orçamento de execução estourado antes de a análise concluir.")
-    if last_decision == "ESCALATED_NOT_ASSESSED":
-        gaps.append("A análise não classificou nenhum impacto ou risco.")
-    return gaps
-
-
 @app.get("/approvals/{session_id}", response_model=EscalationDetail)
 def get_escalation_detail(session_id: str) -> EscalationDetail:
-    """Card 47: o parecer parcial de uma sessão escalada + `gaps` (o que
-    faltou). Lê o `AgentState` congelado no checkpointer."""
+    """Cards 47/49: o parecer parcial de uma sessão escalada, `gaps` (o que
+    faltou) e o `review_brief` (resumo gerado pela IA). Lê o `AgentState`
+    congelado no checkpointer."""
     _config_dict, snapshot = _pending_snapshot_or_404(session_id)
     values = snapshot.values
     entries = read_audit_trail(session_id)
-    escalations = [e for e in entries if e["decision"] in _ESCALATION_REASONS]
-    last_decision = escalations[-1]["decision"] if escalations else None
+    last_decision = last_escalation_decision(entries)
+    threshold = next(
+        (e.get("threshold") for e in reversed(entries) if e.get("threshold") is not None), None
+    )
     requirement = values.get("requirement")
     return EscalationDetail(
         session_id=session_id,
         risk_level=values.get("risk_level"),
         risk_assessed=bool(values.get("risk_assessed", True)),
         confidence=values.get("confidence"),
-        threshold=escalations[-1].get("threshold") if escalations else None,
-        escalation_reason=_ESCALATION_REASONS.get(last_decision, "escalado para revisão humana"),
+        threshold=threshold,
+        escalation_reason=escalation_reason(last_decision),
+        review_brief=values.get("review_brief"),
         requirement_summary=requirement.text if requirement else None,
         impacts=values.get("impacts", []),
         risks=values.get("risks", []),
         dependencies=values.get("dependencies", []),
         recommended_tests=values.get("recommended_tests", []),
         evidence_sources=values.get("evidence_sources", []),
-        gaps=_derive_gaps(values, last_decision),
+        gaps=describe_gaps(values, last_decision),
         review_rounds=values.get("review_rounds", 0),
         max_review_rounds=MAX_REVIEW_ROUNDS,
     )

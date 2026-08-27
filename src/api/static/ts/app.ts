@@ -123,6 +123,17 @@ async function handleAnalyzeSubmit(event: SubmitEvent): Promise<void> {
   }
 }
 
+/** card 49: o resumo gerado pela IA — o que o revisor lê primeiro. */
+function reviewBriefBlock(brief: string | null): HTMLElement | null {
+  if (!brief) return null;
+  const paragraphs = brief.split("\n\n").filter((p) => p.trim() !== "");
+  return el(
+    "div",
+    { class: "mt-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-stone-800" },
+    paragraphs.map((p) => el("p", { class: "mt-1 first:mt-0" }, [text(p)])),
+  );
+}
+
 function bulletList(title: string, items: string[]): HTMLElement {
   return el("div", { class: "mt-2" }, [
     el("p", { class: "text-xs font-semibold uppercase tracking-wide text-stone-500" }, [
@@ -139,12 +150,18 @@ function bulletList(title: string, items: string[]): HTMLElement {
 }
 
 function renderEscalationDetail(detail: EscalationDetail): HTMLElement {
-  return el("div", { class: "mt-3 rounded-md bg-stone-50 p-3 text-sm" }, [
-    el("p", { class: "text-stone-700" }, [
+  const children: Array<Node | string> = [];
+  const brief = reviewBriefBlock(detail.review_brief);
+  if (brief) children.push(brief);
+  children.push(
+    el("p", { class: "mt-2 text-stone-700" }, [
       text(
         `Por que escalou: ${detail.escalation_reason}. Rodadas de reanálise: ${detail.review_rounds}/${detail.max_review_rounds}.`,
       ),
     ]),
+  );
+  return el("div", { class: "mt-3 rounded-md bg-stone-50 p-3 text-sm" }, [
+    ...children,
     bulletList("O que faltou", detail.gaps),
     bulletList(
       "Impactos",
@@ -267,11 +284,14 @@ function pendingApprovalCard(item: PendingApproval): HTMLDivElement {
     })();
   });
 
+  const briefBlock = reviewBriefBlock(item.review_brief);
+
   return el("div", { class: "rounded-lg border border-rose-100 bg-white p-4 shadow-sm" }, [
     el("div", { class: "flex items-center justify-between" }, [
       el("p", { class: "font-mono text-sm text-stone-900" }, [text(item.session_id)]),
       detailButton,
     ]),
+    ...(briefBlock ? [briefBlock] : []),
     el("p", { class: "mt-1 text-sm text-stone-600" }, [
       text(
         `risco: ${riskDisplayLabel(item.risk_level, item.risk_assessed)} · confiança: ${item.confidence ?? "—"} (threshold: ${item.threshold ?? "—"})`,

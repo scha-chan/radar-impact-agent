@@ -227,6 +227,7 @@ def test_escalation_detail_returns_partial_verdict_and_gaps(tmp_path, monkeypatc
     assert body["max_review_rounds"] >= 1
     assert "análise não produziu" in body["escalation_reason"].lower()
     assert any("evidência de código" in g.lower() for g in body["gaps"])
+    assert body["review_brief"]  # card 49
 
 
 def test_escalation_detail_404_for_unknown_session(tmp_path, monkeypatch):
@@ -235,20 +236,17 @@ def test_escalation_detail_404_for_unknown_session(tmp_path, monkeypatch):
         assert client.get("/approvals/nope").status_code == 404
 
 
-def test_derive_gaps_covers_tool_failure_and_budget():
-    from src.api.app import _derive_gaps
+def test_pending_approvals_list_carries_the_ai_review_brief(tmp_path, monkeypatch):
+    # card 49: o resumo gerado pela IA aparece já na lista de pendentes.
+    _mock_low_confidence(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    with TestClient(app) as client:
+        session_id = _escalate(client)
+        approvals = client.get("/approvals").json()
 
-    gaps = _derive_gaps(
-        {
-            "code_matches": [],
-            "impact_patterns": [],
-            "change_history": [],
-            "tools_failed": ["search_code"],
-        },
-        "ESCALATED_BUDGET_EXCEEDED",
-    )
-    assert any("search_code" in g for g in gaps)
-    assert any("Orçamento" in g for g in gaps)
+    item = next(i for i in approvals if i["session_id"] == session_id)
+    assert item["review_brief"]
+    assert isinstance(item["review_brief"], str)
 
 
 def test_reanalyze_via_api_keeps_session_pending_and_counts_the_round(tmp_path, monkeypatch):

@@ -14,6 +14,7 @@ from src.graph.state import (
     Impact,
     ImpactAnalysisResult,
     Requirement,
+    ReviewBrief,
     Risk,
 )
 
@@ -32,6 +33,8 @@ def mock_llm(
     recommended_tests: list[str] | None = None,
     requirement_summary: str | None = None,
     executive_summary: str = "Resumo executivo de teste.",
+    review_summary: str = "Resumo de teste para o revisor.",
+    suggested_context: str = "Contexto sugerido de teste.",
 ) -> None:
     """Substitui `nodes.build_chat_model` por um duplo que responde de
     forma diferente conforme o schema pedido a `with_structured_output` —
@@ -63,6 +66,7 @@ def mock_llm(
         else requirement_text,
         executive_summary=executive_summary,
     )
+    fake_brief = ReviewBrief(summary=review_summary, suggested_context=suggested_context)
 
     def _with_structured_output(schema, *_args, **_kwargs):
         result = MagicMock()
@@ -74,6 +78,8 @@ def mock_llm(
             result.invoke.return_value = fake_analysis
         elif schema is ComposedReport:
             result.invoke.return_value = fake_report
+        elif schema is ReviewBrief:
+            result.invoke.return_value = fake_brief
         else:
             raise AssertionError(f"schema inesperado em with_structured_output: {schema}")
         return result
