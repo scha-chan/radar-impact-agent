@@ -5,6 +5,7 @@
  */
 import { analyzeRequirement, ApiError, getAuditTrail, listPendingApprovals, submitApprovalDecision } from "./api.js";
 import { clear, el, text } from "./dom.js";
+import { formatTimestamp, translateDecision, translateRiskLevel } from "./i18n.js";
 const STATUS_STYLES = {
     published: "bg-rose-100 text-rose-800 border border-rose-200",
     pending_approval: "bg-amber-100 text-amber-800 border border-amber-200",
@@ -43,7 +44,7 @@ function renderAnalyzeResult(result) {
     container.classList.remove("hidden");
     const rows = [
         ["session_id", result.session_id],
-        ["risco", result.risk_level ?? "—"],
+        ["risco", translateRiskLevel(result.risk_level)],
         ["confiança", result.confidence !== null ? String(result.confidence) : "—"],
         ["revisão humana necessária", result.human_review_required ? "sim" : "não"],
     ];
@@ -110,9 +111,9 @@ function pendingApprovalCard(item) {
     return el("div", { class: "rounded-lg border border-rose-100 bg-white p-4 shadow-sm" }, [
         el("p", { class: "font-mono text-sm text-stone-900" }, [text(item.session_id)]),
         el("p", { class: "mt-1 text-sm text-stone-600" }, [
-            text(`risco: ${item.risk_level ?? "—"} · confiança: ${item.confidence ?? "—"} (threshold: ${item.threshold ?? "—"})`),
+            text(`risco: ${translateRiskLevel(item.risk_level)} · confiança: ${item.confidence ?? "—"} (threshold: ${item.threshold ?? "—"})`),
         ]),
-        el("p", { class: "mt-1 text-xs text-stone-400" }, [text(`escalado em ${item.escalated_at}`)]),
+        el("p", { class: "mt-1 text-xs text-stone-400" }, [text(`escalado em ${formatTimestamp(item.escalated_at)}`)]),
         el("div", { class: "mt-3 flex gap-2" }, [approveButton, rejectButton]),
     ]);
 }
@@ -139,10 +140,10 @@ async function refreshApprovals() {
 function auditRow(entry) {
     const cell = (value) => el("td", { class: "border-t border-rose-100 px-3 py-2" }, [text(value)]);
     return el("tr", {}, [
-        cell(entry.timestamp),
-        cell(entry.decision),
+        cell(formatTimestamp(entry.timestamp)),
+        cell(translateDecision(entry.decision)),
         cell(entry.actor),
-        cell(entry.risk_level ?? "—"),
+        cell(translateRiskLevel(entry.risk_level)),
         cell(entry.confidence !== null ? String(entry.confidence) : "—"),
         cell(entry.reason ?? entry.tool_authorized ?? "—"),
     ]);
