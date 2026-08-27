@@ -33,6 +33,7 @@ function renderAnalyzeResult(result) {
     container.classList.remove("hidden");
     const rows = [
         ["session_id", result.session_id],
+        ["repositório analisado", result.github_repo ?? "— (nenhum configurado)"],
         ["confiança", result.confidence !== null ? String(result.confidence) : "—"],
         ["revisão humana necessária", result.human_review_required ? "sim" : "não"],
     ];
@@ -64,12 +65,14 @@ async function handleAnalyzeSubmit(event) {
     event.preventDefault();
     MessageBox.hide();
     const textInput = UtilService.byId("text");
+    const repoInput = UtilService.byId("repo");
     const issueInput = UtilService.byId("issue_number");
     const submitButton = UtilService.byId("analyze-submit");
-    if (!textInput || !issueInput || !submitButton)
+    if (!textInput || !repoInput || !issueInput || !submitButton)
         return;
     const payload = {
         text: textInput.value,
+        ...(repoInput.value.trim() ? { repo: repoInput.value.trim() } : {}),
         ...(issueInput.value ? { issue_number: Number(issueInput.value) } : {}),
     };
     try {

@@ -83,6 +83,12 @@ def test_create_initial_state_defaults():
     assert state["risk_level"] is None
     assert state["human_review_required"] is False
     assert state["analysis"] is None
+    assert state["github_repo"] is None
+
+
+def test_create_initial_state_carries_the_github_repo_override():
+    state = create_initial_state("Adicionar filtro", github_repo="owner/repo")
+    assert state["github_repo"] == "owner/repo"
 
 
 def test_create_initial_state_generates_distinct_session_ids():

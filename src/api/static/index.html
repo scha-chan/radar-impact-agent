@@ -45,6 +45,17 @@
         class="w-full rounded-md border border-stone-300 p-3 text-sm focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
       ></textarea>
 
+      <div>
+        <label class="block text-sm font-medium text-stone-600" for="repo">Repositório do GitHub (opcional)</label>
+        <input
+          type="text"
+          id="repo"
+          placeholder="owner/repo ou https://github.com/owner/repo"
+          class="mt-1 w-full rounded-md border border-stone-300 p-2 text-sm focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+        >
+        <p class="mt-1 text-xs text-stone-400">Vazio usa o repositório configurado no servidor. Requer um GITHUB_TOKEN com acesso.</p>
+      </div>
+
       <div class="flex items-end justify-between gap-3">
         <div>
           <label class="block text-sm font-medium text-stone-600" for="issue_number">Issue # (opcional)</label>

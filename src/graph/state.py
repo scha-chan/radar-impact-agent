@@ -206,6 +206,9 @@ class AgentState(TypedDict):
     # entrada
     raw_requirement: str
     requirement: Requirement | None
+    # repositório-alvo desta execução (card 43): `owner/repo`. None -> os
+    # nodes caem no GITHUB_REPO do ambiente. Permite testar fontes diferentes.
+    github_repo: str | None
 
     # controle de fluxo
     is_adversarial: bool
@@ -262,6 +265,7 @@ def create_initial_state(
     raw_requirement: str,
     *,
     issue_number: int | None = None,
+    github_repo: str | None = None,
     max_retries: int = 2,
     max_steps: int = MAX_STEPS_DEFAULT,
 ) -> AgentState:
@@ -286,6 +290,7 @@ def create_initial_state(
         started_at=datetime.now(timezone.utc),
         raw_requirement=raw_requirement,
         requirement=None,
+        github_repo=github_repo,
         is_adversarial=False,
         adversarial_reason=None,
         retries_left=max_retries,

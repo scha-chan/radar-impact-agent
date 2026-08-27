@@ -10,6 +10,7 @@ reutilizados por todas as requisições — é o que faz `POST
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -70,6 +71,7 @@ def _to_analyze_response(session_id: str, result: dict) -> AnalyzeResponse:
     return AnalyzeResponse(
         session_id=session_id,
         status=_status_from_result(result),
+        github_repo=result.get("github_repo") or os.getenv("GITHUB_REPO") or None,
         risk_level=result.get("risk_level"),
         risk_assessed=bool(result.get("risk_assessed", True)),
         confidence=result.get("confidence"),
@@ -90,7 +92,9 @@ def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     """RF-01.2: submete um requisito em texto livre. Roda o grafo até
     publicar, arquivar, bloquear (cenário 3) ou pausar para aprovação
     (cenário 2) — o que acontecer primeiro."""
-    state: AgentState = create_initial_state(request.text, issue_number=request.issue_number)
+    state: AgentState = create_initial_state(
+        request.text, issue_number=request.issue_number, github_repo=request.repo
+    )
     config_dict = {"configurable": {"thread_id": state["session_id"]}}
 
     result = app.state.graph.invoke(state, config=config_dict)
