@@ -1,18 +1,13 @@
-"""Nodes stub do grafo RADAR.
+"""Nodes do grafo RADAR.
 
-Cada node abaixo produz uma atualizacao minima e deterministica do
-`AgentState`, sem chamar LLM ou API externa — o objetivo deste card e o
-grafo ser executavel ponta a ponta (sequencial, condicional, paralelo,
-parada) antes das integracoes reais existirem. `score_risk` e a excecao:
-ja usa `src.domain.risk`, porque essa logica e determinística e ja esta
-pronta (card 02).
-
-As integracoes reais chegam nos cards 6-18: extract_requirement (LLM,
-card 6), search_codebase/fetch_history (GitHub API, cards 8-9),
-retrieve_rag (ChromaDB, card 13 — ja real), analyze_impact (LLM, card 14
-do LLM — ainda pendente), human_approval (interrupt + checkpointer, card
-15 — ja real), publish_comment (GitHub API, card 10), guard_adversarial
-(detector real, card 18 — ja real).
+Cada node produz uma atualizacao do `AgentState`. A topologia foi montada
+com nodes stub (card 04) e as integracoes reais entraram depois:
+extract_requirement (LLM, card 6), search_codebase/fetch_history (GitHub
+API, cards 8-9), retrieve_rag (ChromaDB, card 13), analyze_impact (LLM,
+card 44), score_risk (Python puro, card 02), human_approval (interrupt +
+checkpointer, card 15), publish_comment (GitHub API, card 10),
+guard_adversarial (detector real, card 18). `budget_gate` continua sendo
+so um ponto de checagem (card 35).
 """
 
 from __future__ import annotations
@@ -41,7 +36,7 @@ from src.governance.tool_executor import ToolExecutor
 from src.observability.audit import AuditRecord, record_audit
 from src.graph.budget import elapsed_seconds, is_budget_exceeded
 from src.graph.llm import LLM_MODEL
-from src.graph.state import AgentState, EvidenceSource, Requirement
+from src.graph.state import AgentState, EvidenceSource, ImpactAnalysisResult, Requirement
 from src.mcp_server.tools.fetch_history import FETCH_HISTORY_PERMISSION
 from src.mcp_server.tools.fetch_history import fetch_history as _fetch_history
 from src.mcp_server.tools.publish_comment import PUBLISH_COMMENT_PERMISSION
@@ -290,9 +285,88 @@ def budget_gate(state: AgentState) -> dict:
     return {}
 
 
+_EMPTY_ANALYSIS = {"impacts": [], "risks": [], "dependencies": [], "recommended_tests": []}
+
+
+def _known_evidence_refs(state: AgentState) -> set[str]:
+    """Todos os identificadores de evidência coletada que um impacto pode
+    citar em `Impact.evidence` (RF-04.5) — o arquivo/fonte/ref e também o
+    basename do arquivo, porque o modelo às vezes cita só `orders.py` em
+    vez do caminho inteiro."""
+    refs: set[str] = set()
+    for match in state["code_matches"]:
+        refs.add(match.file)
+        refs.add(match.file.rsplit("/", 1)[-1])
+    for pattern in state["impact_patterns"]:
+        refs.add(pattern.source)
+    for entry in state["change_history"]:
+        refs.add(entry.ref)
+    for source in state["evidence_sources"]:
+        refs.add(source.ref)
+    return {ref for ref in refs if ref}
+
+
+def _impact_is_grounded(evidence: str, known_refs: set[str]) -> bool:
+    text = (evidence or "").strip()
+    if not text:
+        return False
+    return any(ref in text or text in ref for ref in known_refs)
+
+
 def analyze_impact(state: AgentState) -> dict:
-    """Stub de RF-04: LLM real chega no card 14."""
-    return {"impacts": [], "risks": [], "dependencies": [], "recommended_tests": []}
+    """RF-04: o LLM classifica impactos por área (severidade + evidência),
+    enumera riscos (severidade × probabilidade + mitigação), lista
+    dependências externas e sugere testes prioritários, a partir da
+    evidência coletada em paralelo (código, RAG, histórico).
+
+    O LLM não decide `risk_level` nem `confidence` (RF-05.4) — só alimenta
+    `score_risk`, que é Python puro.
+
+    RF-04.5 (rastreabilidade): nenhuma afirmação sem evidência. Se nenhuma
+    fonte de evidência foi coletada, a saída é vazia — não há o que
+    sustentar. Caso contrário, impactos cujo campo `evidence` não referencia
+    nenhuma fonte coletada são descartados (com log), nunca publicados.
+
+    Tratamento de falha (mesma filosofia de `extract_requirement`/
+    `guard_adversarial`): erro de chamada ou de parse do LLM → listas
+    vazias e log; o grafo continua e `score_risk` penaliza a confiança do
+    resultado degradado (seção 11 do PRD).
+    """
+    requirement = state["requirement"]
+    if requirement is None or not state["evidence_sources"]:
+        return dict(_EMPTY_ANALYSIS)
+
+    _set_gen_ai_span_attributes()
+    prompt = prompts.build_analyze_impact_prompt(
+        requirement,
+        state["code_matches"],
+        state["impact_patterns"],
+        state["change_history"],
+    )
+    try:
+        structured_llm = build_chat_model().with_structured_output(ImpactAnalysisResult)
+        result = structured_llm.invoke(prompt)
+    except Exception as exc:  # noqa: BLE001 - parse e erro de chamada tratados igual (RF-04, degradação)
+        logger.error(
+            "analyze_impact_failed",
+            extra={"session_id": state["session_id"], "error": str(exc)},
+        )
+        return dict(_EMPTY_ANALYSIS)
+
+    known_refs = _known_evidence_refs(state)
+    grounded = [imp for imp in result.impacts if _impact_is_grounded(imp.evidence, known_refs)]
+    dropped = len(result.impacts) - len(grounded)
+    if dropped:
+        logger.warning(
+            "analyze_impact_dropped_ungrounded_impacts",
+            extra={"session_id": state["session_id"], "dropped": dropped},
+        )
+    return {
+        "impacts": grounded,
+        "risks": result.risks,
+        "dependencies": result.dependencies,
+        "recommended_tests": result.recommended_tests,
+    }
 
 
 def score_risk(state: AgentState) -> dict:

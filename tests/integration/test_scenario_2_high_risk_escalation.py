@@ -2,11 +2,12 @@
 
 Entrada: "Adicionar autenticação por 2FA no login." Igual ao cenário 1
 (`test_scenario_1_happy_path.py`), roda o grafo real de ponta a ponta com
-as tools de evidência mockadas — a diferença aqui é que `analyze_impact`
-(o LLM que classifica impactos/riscos, ainda stub no código, card 14 do
-LLM) também é mockado, fixado no exemplo do PRD: um risco HIGH/LIKELY (com
-mitigação) que empurra `risk_level` para HIGH. Isso não é possível apenas
-com as tools de evidência, porque `analyze_impact` real ainda não existe.
+as tools de evidência mockadas — a diferença aqui é que a saída do LLM de
+`analyze_impact` (card 44) é fixada no exemplo do PRD via `mock_llm`: um
+risco HIGH/LIKELY (com mitigação) que empurra `risk_level` para HIGH. O
+node `analyze_impact` roda de verdade; só a chamada ao modelo é dublada,
+porque o risco desse cenário depende do julgamento do LLM sobre a
+evidência.
 
 A confiança calculada aqui (65) não é o `63` do exemplo narrativo do PRD —
 esse número na seção 12 é ilustrativo, não uma saída travada da fórmula
@@ -30,11 +31,30 @@ REQUIREMENT_TEXT = (
 
 
 def _mock_evidence_and_analysis(monkeypatch):
+    # analyze_impact (card 44) roda de verdade; a chamada ao modelo é
+    # fixada aqui no exemplo do cenário 2 (seção 12 do PRD): um risco
+    # HIGH/LIKELY, com mitigação proposta, que empurra risk_level para HIGH.
     mock_llm(
         monkeypatch,
         feature_type="login",
         search_terms=["2FA", "login", "autenticacao"],
         requirement_text=REQUIREMENT_TEXT,
+        risks=[
+            Risk(
+                description=(
+                    "Usuários existentes sem segundo fator cadastrado podem ficar sem acesso"
+                ),
+                severity="HIGH",
+                probability="LIKELY",
+                mitigation="Migração faseada com período de tolerância",
+            )
+        ],
+        dependencies=["Provedor de SMS", "Serviço de sessão"],
+        recommended_tests=[
+            "login com 2FA habilitado",
+            "recuperação de conta com 2FA perdido",
+            "migração de usuário existente",
+        ],
     )
 
     # Nenhum código encontrado (a integração com o provedor de SMS ainda
@@ -58,33 +78,6 @@ def _mock_evidence_and_analysis(monkeypatch):
 
     # Nenhum histórico relevante encontrado — RF-03.3.
     monkeypatch.setattr(nodes, "_fetch_history", lambda *_a, **_k: [])
-
-    # analyze_impact real (LLM, card 14 do LLM) ainda é stub — fixado aqui
-    # no exemplo do cenário 2 (seção 12 do PRD): um risco HIGH/LIKELY, com
-    # mitigação proposta.
-    monkeypatch.setattr(
-        nodes,
-        "analyze_impact",
-        lambda _state: {
-            "impacts": [],
-            "risks": [
-                Risk(
-                    description=(
-                        "Usuários existentes sem segundo fator cadastrado podem ficar sem acesso"
-                    ),
-                    severity="HIGH",
-                    probability="LIKELY",
-                    mitigation="Migração faseada com período de tolerância",
-                )
-            ],
-            "dependencies": ["Provedor de SMS", "Serviço de sessão"],
-            "recommended_tests": [
-                "login com 2FA habilitado",
-                "recuperação de conta com 2FA perdido",
-                "migração de usuário existente",
-            ],
-        },
-    )
 
 
 def test_scenario_2_high_risk_escalates_and_pauses(tmp_path, monkeypatch):
@@ -132,8 +125,8 @@ def test_scenario_2_approval_resumes_and_publishes_with_human_review_stamp(tmp_p
     with open(published_path, encoding="utf-8") as f:
         body = f.read()
     # "Carimbo de revisão humana" (seção 12 do PRD): a composição definitiva
-    # do comentário a partir de `ImpactAnalysis` é o card 14 do LLM
-    # (pendente); render_comment (card 10) já marca a revisão humana.
+    # do comentário a partir de `ImpactAnalysis` é o card 45 (pendente);
+    # render_comment (card 10) já marca a revisão humana.
     assert "Revisão humana necessária:** sim" in body
     assert "HIGH" in body
 
