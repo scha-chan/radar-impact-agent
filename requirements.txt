@@ -18,3 +18,4 @@ opentelemetry-sdk==1.44.0
 radon==6.0.1
 mutmut==2.5.1
 hypothesis==6.165.10
+scikit-learn==1.9.0
