@@ -22,6 +22,13 @@ exclude_lines = [
 # fonte de comportamento não-determinístico entre execuções.
 [tool.mutmut]
 source_paths = ["src/domain", "src/governance"]
+# `source_paths` só diz o que é MUTADO — mutmut não copia o resto de
+# src/ sozinho, e tests/conftest.py::tests/helpers.py importa
+# src.graph.nodes incondicionalmente (roda pra qualquer teste, mesmo os
+# quatro arquivos abaixo). Sem `also_copy = ["src"]`, todo teste falha
+# com "ModuleNotFoundError: No module named 'src.graph'" dentro de
+# mutants/ — encontrado na primeira execução real do job no CI.
+also_copy = ["src"]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_risk.py",
     "tests/unit/test_adversarial.py",
@@ -35,4 +42,3 @@ use_git_change_detection = false
 # desliga a coleta de cobertura (pytest-cov) só para essas chamadas, sem
 # tocar no addopts real usado pela suíte completa.
 pytest_add_cli_args = ["--no-cov"]
-debug = true
