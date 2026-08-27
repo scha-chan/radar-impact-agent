@@ -191,3 +191,17 @@ def test_render_comment_without_analysis_keeps_minimal_body():
     assert "### Impactos" not in body
     assert "**Nível de risco:** MEDIUM" in body
     assert state["session_id"] in body
+
+
+def test_render_comment_marks_risk_as_not_assessed():
+    # card 46: parecer escalou sem avaliação -> o comentário não afirma
+    # "risco MEDIUM", diz que não foi avaliado (piso aplicado).
+    state = create_initial_state("x")
+    body = render_comment(
+        state,
+        analysis=_analysis(risk_level="MEDIUM", risk_assessed=False),
+        prose=None,
+    )
+
+    assert "não avaliado — evidência insuficiente (piso MEDIUM aplicado)" in body
+    assert "**Nível de risco:** MEDIUM\n" not in body

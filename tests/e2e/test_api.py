@@ -109,12 +109,17 @@ def test_analyze_escalates_and_appears_in_pending_approvals(tmp_path, monkeypatc
 
     with TestClient(app) as client:
         analyze_response = client.post("/analyze", json={"text": "Adicionar algo qualquer"})
-        assert analyze_response.json()["status"] == "pending_approval"
-        session_id = analyze_response.json()["session_id"]
+        body = analyze_response.json()
+        assert body["status"] == "pending_approval"
+        session_id = body["session_id"]
 
         approvals = client.get("/approvals").json()
 
-    assert any(item["session_id"] == session_id for item in approvals)
+    # card 46: sem evidência, escalou sem avaliação — a resposta e o item do
+    # painel marcam risk_assessed=False para a tela mostrar "não avaliado".
+    assert body["risk_assessed"] is False
+    item = next(item for item in approvals if item["session_id"] == session_id)
+    assert item["risk_assessed"] is False
 
 
 def test_full_approval_flow_publishes_after_approval(tmp_path, monkeypatch):
@@ -185,7 +190,8 @@ def test_audit_trail_endpoint_returns_entries_for_a_known_session(tmp_path, monk
 
     assert audit_response.status_code == 200
     entries = audit_response.json()
-    assert entries[0]["decision"] == "ESCALATED"
+    # "Adicionar algo qualquer" sem evidência -> escala sem avaliação (card 46).
+    assert entries[0]["decision"] == "ESCALATED_NOT_ASSESSED"
     assert entries[0]["session_id"] == session_id
 
 

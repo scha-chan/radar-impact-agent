@@ -72,9 +72,16 @@ def _render_full_report(analysis: ImpactAnalysis, prose: str | None) -> str:
     lines = ["## Parecer RADAR", ""]
     if prose:
         lines += [prose.strip(), ""]
+    if analysis.risk_assessed:
+        risk_line = f"**Nível de risco:** {analysis.risk_level}"
+    else:
+        risk_line = (
+            f"**Nível de risco:** não avaliado — evidência insuficiente "
+            f"(piso {analysis.risk_level} aplicado)"
+        )
     lines += [
         f"**Requisito:** {analysis.requirement_summary}",
-        f"**Nível de risco:** {analysis.risk_level}",
+        risk_line,
         f"**Confiança:** {analysis.confidence}/100",
         f"**Revisão humana necessária:** {'sim' if analysis.human_review_required else 'não'}",
         "",

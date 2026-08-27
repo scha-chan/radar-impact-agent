@@ -24,6 +24,7 @@ AuditDecision = Literal[
     "AUTO_PUBLISHED",
     "ESCALATED",
     "ESCALATED_BUDGET_EXCEEDED",
+    "ESCALATED_NOT_ASSESSED",
     "BLOCKED_ADVERSARIAL",
     "APPROVED_PUBLISHED",
     "REJECTED_ARCHIVED",
@@ -108,13 +109,14 @@ def read_audit_trail(session_id: str, *, path: str | None = None) -> list[dict]:
     return [entry for entry in read_all_entries(path=path) if entry.get("session_id") == session_id]
 
 
-_PENDING_DECISIONS = {"ESCALATED", "ESCALATED_BUDGET_EXCEEDED"}
+_PENDING_DECISIONS = {"ESCALATED", "ESCALATED_BUDGET_EXCEEDED", "ESCALATED_NOT_ASSESSED"}
 
 
 def list_pending_sessions(*, path: str | None = None) -> list[dict]:
     """RF-10.2 (card 30): sessões aguardando aprovação — a última decisão
-    registrada para a sessão é `ESCALATED` ou `ESCALATED_BUDGET_EXCEEDED`
-    (card 35), sem nenhuma resolução (`APPROVED_PUBLISHED`/
+    registrada para a sessão é `ESCALATED`, `ESCALATED_BUDGET_EXCEEDED`
+    (card 35) ou `ESCALATED_NOT_ASSESSED` (card 46), sem nenhuma resolução
+    (`APPROVED_PUBLISHED`/
     `REJECTED_ARCHIVED`/`EXPIRED_ARCHIVED`/`PUBLISH_DENIED`) depois dela.
     Deriva do sinal 2 de observabilidade já existente (card 20) em vez de
     manter um registro de "pendentes" à parte — a trilha de auditoria já é
