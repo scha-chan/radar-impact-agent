@@ -175,6 +175,7 @@ ver [Observabilidade](#observabilidade-os-dois-sinais-e-uma-investigação-real)
 |---|---|
 | Orquestração | LangGraph |
 | API | FastAPI + uvicorn |
+| Frontend | TypeScript (ES modules, sem bundler) + Tailwind CSS (CDN, paleta `rose`) |
 | Validação | Pydantic v2 |
 | Tools | Servidor MCP próprio (Python SDK) |
 | Vetorial | ChromaDB (local, persistente) |
@@ -322,6 +323,15 @@ uvicorn src.api.app:app --reload
 ```
 
 Abra `http://localhost:8000` — página única (card 30, RF-10) para submeter um requisito, ver o painel de aprovações pendentes e inspecionar a trilha de auditoria de uma sessão. Endpoints: `POST /analyze` (RF-01.2), `GET /approvals`/`POST /approvals/{session_id}` (RF-07.2), `GET /audit/{session_id}` (RF-09.4). Documentação interativa automática do FastAPI em `/docs`.
+
+**Frontend (TypeScript + Tailwind).** A lógica da página (`src/api/static/ts/*.ts` — `types.ts`, `api.ts`, `dom.ts`, `app.ts`) é escrita em TypeScript e compilada para `src/api/static/js/` (servido em `/static`), sem bundler — cada arquivo é um módulo ES nativo carregado pelo navegador. Estilo via Tailwind (CDN, paleta `rose`), sem CSS próprio. Depois de editar um `.ts`:
+
+```bash
+npm install   # uma vez
+npm run build # ou "npm run watch" durante o desenvolvimento
+```
+
+O CI roda `tsc --noEmit` (job `typecheck-frontend`) a cada push/PR para pegar erro de tipo antes do merge; o JS compilado fica versionado no repositório (não há passo de build de frontend no Docker/CI) — rebuilde e commite o resultado sempre que mudar um `.ts`.
 
 ### Executando o grafo diretamente
 
