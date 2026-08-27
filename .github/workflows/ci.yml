@@ -49,9 +49,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install -r requirements.txt
-      - run: mutmut run || true
-      - run: mutmut export-cicd-stats
-      - run: python -m src.quality.mutation_gate mutants/mutmut-cicd-stats.json --min-score 60
+      - run: mutmut run --CI
+      - run: mutmut junitxml > mutmut-report.xml
+      - run: python -m src.quality.mutation_gate mutmut-report.xml --min-score 60
 
   build:
     runs-on: ubuntu-latest
