@@ -20,6 +20,24 @@ export function translateRiskLevel(level: string | null): string {
   return RISK_LEVEL_LABELS[level] ?? level;
 }
 
+/**
+ * Classes Tailwind de feedback visual (cor + negrito) para o nível de
+ * risco — usado onde o risco é o dado mais importante da tela (painel de
+ * resultado da análise), não nos lugares onde ele é só mais uma coluna
+ * (card de aprovação pendente, tabela de auditoria).
+ */
+const RISK_LEVEL_CLASSES: Record<string, string> = {
+  LOW: "font-bold text-emerald-700",
+  MEDIUM: "font-bold text-amber-700",
+  HIGH: "font-bold text-orange-700",
+  CRITICAL: "font-bold text-red-700",
+};
+
+export function riskLevelClass(level: string | null): string {
+  if (level === null) return "font-bold text-stone-500";
+  return RISK_LEVEL_CLASSES[level] ?? "font-bold text-stone-500";
+}
+
 const DECISION_LABELS: Record<string, string> = {
   ESCALATED: "Escalado para aprovação",
   AUTO_PUBLISHED: "Publicado automaticamente",

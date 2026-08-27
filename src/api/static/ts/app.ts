@@ -6,7 +6,7 @@
 
 import { analyzeRequirement, ApiError, getAuditTrail, listPendingApprovals, submitApprovalDecision } from "./api.js";
 import { clear, el, text } from "./dom.js";
-import { formatTimestamp, translateDecision, translateRiskLevel } from "./i18n.js";
+import { formatTimestamp, riskLevelClass, translateDecision, translateRiskLevel } from "./i18n.js";
 import type { AnalysisStatus, AnalyzeResponse, AuditEntry, PendingApproval } from "./types.js";
 
 const STATUS_STYLES: Record<AnalysisStatus, string> = {
@@ -56,7 +56,6 @@ function renderAnalyzeResult(result: AnalyzeResponse): void {
 
   const rows: Array<[string, string]> = [
     ["session_id", result.session_id],
-    ["risco", translateRiskLevel(result.risk_level)],
     ["confiança", result.confidence !== null ? String(result.confidence) : "—"],
     ["revisão humana necessária", result.human_review_required ? "sim" : "não"],
   ];
@@ -65,6 +64,10 @@ function renderAnalyzeResult(result: AnalyzeResponse): void {
   }
 
   const dl = el("dl", { class: "grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm" });
+  dl.append(
+    el("dt", { class: "font-medium text-stone-500" }, [text("risco")]),
+    el("dd", { class: riskLevelClass(result.risk_level) }, [text(translateRiskLevel(result.risk_level))]),
+  );
   for (const [label, value] of rows) {
     dl.append(
       el("dt", { class: "font-medium text-stone-500" }, [text(label)]),
