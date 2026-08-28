@@ -328,3 +328,62 @@ def test_reanalyze_refused_after_the_round_limit(tmp_path, monkeypatch):
 
     assert second.status_code == 409
     assert "limite" in second.json()["detail"].lower()
+
+
+# --- card 50: resiliência a checkpoints antigos / órfãos --------------------
+
+
+def test_pending_list_skips_sessions_without_a_live_checkpoint(tmp_path, monkeypatch):
+    from src.observability.audit import AuditRecord, record_audit
+
+    monkeypatch.chdir(tmp_path)
+    with TestClient(app) as client:
+        # escalação na trilha de auditoria, mas sem checkpoint correspondente
+        record_audit(AuditRecord(session_id="ghost1234", decision="ESCALATED", actor="system"))
+        approvals = client.get("/approvals").json()
+
+    assert all(item["session_id"] != "ghost1234" for item in approvals)
+
+
+def test_submit_approval_backfills_missing_state_keys(tmp_path, monkeypatch):
+    _mock_low_confidence(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    with TestClient(app) as client:
+        session_id = _escalate(client)
+
+        real_get_state = app.state.graph.get_state
+        real_update_state = app.state.graph.update_state
+        backfilled: list[dict] = []
+
+        def _stale_snapshot(config, *a, **k):
+            snap = real_get_state(config, *a, **k)
+            stripped = {key: v for key, v in snap.values.items() if key != "review_brief"}
+            return snap._replace(values=stripped)
+
+        def _record_update(config, values, *a, **k):
+            backfilled.append(values)
+            return real_update_state(config, values, *a, **k)
+
+        monkeypatch.setattr(app.state.graph, "get_state", _stale_snapshot)
+        monkeypatch.setattr(app.state.graph, "update_state", _record_update)
+
+        resp = client.post(f"/approvals/{session_id}", json={"decision": "REJECTED"})
+
+    assert resp.status_code == 200
+    assert any("review_brief" in call for call in backfilled)
+
+
+def test_resume_failure_returns_409_not_500(tmp_path, monkeypatch):
+    _mock_low_confidence(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    with TestClient(app) as client:
+        session_id = _escalate(client)
+
+        def _boom(*_a, **_k):
+            raise KeyError("reanalysis_requested")
+
+        monkeypatch.setattr(app.state.graph, "invoke", _boom)
+        resp = client.post(f"/approvals/{session_id}", json={"decision": "REJECTED"})
+
+    assert resp.status_code == 409
+    assert "versão anterior" in resp.json()["detail"]

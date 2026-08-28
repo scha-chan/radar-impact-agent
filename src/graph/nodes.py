@@ -319,7 +319,7 @@ def _known_evidence_refs(state: AgentState) -> set[str]:
         refs.add(entry.ref)
     for source in state["evidence_sources"]:
         refs.add(source.ref)
-    if state["reviewer_context"]:
+    if state.get("reviewer_context"):
         refs.add("revisor")  # card 47: impacto pode se apoiar no contexto do revisor
     return {ref for ref in refs if ref}
 
@@ -364,7 +364,7 @@ def analyze_impact(state: AgentState) -> dict:
         state["code_matches"],
         state["impact_patterns"],
         state["change_history"],
-        state["reviewer_context"],
+        state.get("reviewer_context") or [],
     )
     try:
         structured_llm = build_chat_model().with_structured_output(ImpactAnalysisResult)
@@ -559,7 +559,7 @@ def brief_escalation(state: AgentState) -> dict:
     prompt = prompts.build_review_brief_prompt(
         requirement,
         risk_level=state["risk_level"],
-        risk_assessed=state["risk_assessed"],
+        risk_assessed=state.get("risk_assessed", True),
         confidence=state["confidence"],
         threshold=CONFIDENCE_THRESHOLD,
         reason=reason,
@@ -638,7 +638,7 @@ def human_approval(state: AgentState) -> dict:
             "session_id": state["session_id"],
             "risk_level": state["risk_level"],
             "confidence": state["confidence"],
-            "review_rounds": state["review_rounds"],
+            "review_rounds": state.get("review_rounds", 0),
             "max_review_rounds": MAX_REVIEW_ROUNDS,
             "expires_at": state["approval_expires_at"].isoformat()
             if state["approval_expires_at"]
@@ -669,7 +669,7 @@ _STEPS_PER_REANALYSIS = 6
 
 
 def _request_reanalysis(state: AgentState, context: str | None) -> dict:
-    round_number = state["review_rounds"] + 1
+    round_number = state.get("review_rounds", 0) + 1
     ctx = (context or "").strip()
     update: dict = {
         "approval_decision": None,
@@ -679,7 +679,7 @@ def _request_reanalysis(state: AgentState, context: str | None) -> dict:
         "max_steps": state["max_steps"] + _STEPS_PER_REANALYSIS,
     }
     if ctx:
-        update["reviewer_context"] = state["reviewer_context"] + [ctx]
+        update["reviewer_context"] = (state.get("reviewer_context") or []) + [ctx]
         update["evidence_sources"] = [
             EvidenceSource(type="reviewer", ref=f"revisor#{round_number}")
         ]
@@ -712,7 +712,7 @@ def _is_approval_expired(state: AgentState) -> bool:
 def route_after_approval(state: AgentState) -> str:
     if state["approval_decision"] == "APPROVED":
         return "publish_comment"
-    if state["reanalysis_requested"]:
+    if state.get("reanalysis_requested"):
         return "analyze_impact"  # card 47: revisor pediu reanálise com contexto novo
     return "archive"
 
@@ -728,7 +728,7 @@ def _build_impact_analysis(state: AgentState, requirement_summary: str) -> Impac
         issue_number=state["issue_number"],
         requirement_summary=requirement_summary,
         risk_level=state["risk_level"] or "LOW",
-        risk_assessed=state["risk_assessed"],
+        risk_assessed=state.get("risk_assessed", True),
         confidence=state["confidence"] if state["confidence"] is not None else 0,
         human_review_required=state["human_review_required"],
         impacts=state["impacts"],
