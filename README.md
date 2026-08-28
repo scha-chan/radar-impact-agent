@@ -231,6 +231,8 @@ Três camadas de defesa contra conteúdo externo não confiável (seção 13 do 
 
 **Resumo para o revisor** (card 49) — ao escalar, o node `brief_escalation` gera um `review_brief` (prompt `05-review-brief`): 2–3 frases sobre o que a mudança pede e por que escalou, mais uma sugestão do que informar numa reanálise. Aparece já em `GET /approvals` (não só no detalhe) e no topo de cada card do painel. Regenerado a cada rodada de reanálise.
 
+**Resiliência do painel** (card 50) — `GET /approvals` só lista sessões cujo checkpoint ainda está pausado em `human_approval` (as escaladas cujo checkpoint foi perdido não aparecem). `POST /approvals/{session_id}` completa o state congelado com as chaves de `AgentState` que uma versão anterior do agente não gravou antes de retomar; se a retomada ainda assim falhar, responde 409 em vez de 500.
+
 **`DRY_RUN`** — com `DRY_RUN=false` (padrão) e um requisito com `issue_number`, `publish_comment` publica de verdade na Issue configurada em `GITHUB_REPO`. Deixe `DRY_RUN=true` para testar sem publicar nada; o comentário é gravado em `audit/dry_run/{session_id}.md`.
 
 Nenhum segredo é versionado — `.env` está no `.gitignore`, `.env.example` só tem chaves vazias, e o pipeline de CI roda um scan de segredos (`gitleaks`) em todo push/PR (card 25).

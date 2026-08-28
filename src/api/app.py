@@ -10,6 +10,7 @@ reutilizados por todas as requisições — é o que faz `POST
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -37,7 +38,22 @@ from src.graph.state import MAX_REVIEW_ROUNDS, AgentState, create_initial_state
 from src.observability.audit import list_pending_sessions, read_audit_trail
 from src.observability.tracing import configure_tracing
 
+logger = logging.getLogger(__name__)
+
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# Card 50: chaves do `AgentState` adicionadas depois da primeira versão que
+# pausava em `human_approval`. Um checkpoint gravado por uma versão antiga
+# não as tem, e retomá-lo daria `KeyError` num node — aqui completamos o
+# state congelado com o default antes de retomar.
+_RESUME_SCHEMA_DEFAULTS: dict[str, object] = {
+    "github_repo": None,
+    "risk_assessed": True,
+    "reviewer_context": [],
+    "review_rounds": 0,
+    "reanalysis_requested": False,
+    "review_brief": None,
+}
 
 
 @asynccontextmanager
@@ -102,40 +118,59 @@ def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     return _to_analyze_response(state["session_id"], result)
 
 
-def _review_brief_for(session_id: str) -> str | None:
-    """`review_brief` (card 49) do state congelado da sessão, se houver."""
-    snapshot = app.state.graph.get_state({"configurable": {"thread_id": session_id}})
-    return snapshot.values.get("review_brief") if snapshot.values else None
+def _is_paused_for_approval(snapshot) -> bool:
+    return snapshot.next == ("human_approval",)
 
 
 @app.get("/approvals", response_model=list[PendingApproval])
 def list_approvals() -> list[PendingApproval]:
-    """RF-10.2: painel de pareceres aguardando aprovação. Cada item traz o
-    `review_brief` (card 49) — o resumo, gerado pela IA, do que a mudança
-    pede e por que escalou —, lido do state congelado no checkpointer."""
-    return [
-        PendingApproval(
-            session_id=entry["session_id"],
-            risk_level=entry.get("risk_level"),
-            risk_assessed=entry["decision"] == "ESCALATED",
-            confidence=entry.get("confidence"),
-            threshold=entry.get("threshold"),
-            escalated_at=entry["timestamp"],
-            review_brief=_review_brief_for(entry["session_id"]),
+    """RF-10.2: painel de pareceres aguardando aprovação. Card 50: só lista
+    sessões cujo checkpoint ainda existe e está de fato pausado em
+    `human_approval` — as que a trilha de auditoria marca como escaladas
+    mas cujo checkpoint foi perdido (ex.: banco recriado) não aparecem,
+    porque não dá para agir sobre elas. Cada item traz o `review_brief`
+    (card 49) lido do state congelado."""
+    items: list[PendingApproval] = []
+    for entry in list_pending_sessions():
+        session_id = entry["session_id"]
+        snapshot = app.state.graph.get_state({"configurable": {"thread_id": session_id}})
+        if not _is_paused_for_approval(snapshot):
+            continue
+        items.append(
+            PendingApproval(
+                session_id=session_id,
+                risk_level=entry.get("risk_level"),
+                risk_assessed=entry["decision"] == "ESCALATED",
+                confidence=entry.get("confidence"),
+                threshold=entry.get("threshold"),
+                escalated_at=entry["timestamp"],
+                review_brief=snapshot.values.get("review_brief") if snapshot.values else None,
+            )
         )
-        for entry in list_pending_sessions()
-    ]
+    return items
 
 
 def _pending_snapshot_or_404(session_id: str):
     config_dict = {"configurable": {"thread_id": session_id}}
     snapshot = app.state.graph.get_state(config_dict)
-    if snapshot.next != ("human_approval",):
+    if not _is_paused_for_approval(snapshot):
         raise HTTPException(
             status_code=404,
             detail=f"sessão {session_id!r} não encontrada ou não está aguardando aprovação",
         )
     return config_dict, snapshot
+
+
+def _backfill_missing_state(config_dict: dict, values: dict) -> None:
+    """Card 50: completa o state congelado com as chaves de `AgentState`
+    que uma versão antiga do agente não gravou, antes de retomar."""
+    missing = {k: v for k, v in _RESUME_SCHEMA_DEFAULTS.items() if k not in values}
+    if missing:
+        logger.warning(
+            "approval_state_backfilled",
+            extra={"thread_id": config_dict["configurable"]["thread_id"], "keys": list(missing)},
+        )
+        app.state.graph.update_state(config_dict, missing)
 
 
 @app.get("/approvals/{session_id}", response_model=EscalationDetail)
@@ -178,6 +213,7 @@ def submit_approval(session_id: str, request: ApprovalDecisionRequest) -> Analyz
     mais aguardando aprovação — `graph.get_state` devolve `next=()` nos dois
     casos (thread desconhecida ou já resolvida)."""
     config_dict, snapshot = _pending_snapshot_or_404(session_id)
+    _backfill_missing_state(config_dict, snapshot.values)
 
     if request.decision == "REANALYZE":
         context = (request.context or "").strip()
@@ -196,7 +232,17 @@ def submit_approval(session_id: str, request: ApprovalDecisionRequest) -> Analyz
     else:
         resume = request.decision
 
-    result = app.state.graph.invoke(Command(resume=resume), config=config_dict)
+    try:
+        result = app.state.graph.invoke(Command(resume=resume), config=config_dict)
+    except Exception as exc:  # noqa: BLE001 - card 50: retomada falhou -> 409, não 500
+        logger.exception("approval_resume_failed", extra={"session_id": session_id})
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"não foi possível retomar a sessão {session_id!r} — provavelmente foi "
+                "criada por uma versão anterior do agente. Descarte-a e submeta o requisito de novo."
+            ),
+        ) from exc
 
     return _to_analyze_response(session_id, result)
 

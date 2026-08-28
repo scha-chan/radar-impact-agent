@@ -25,8 +25,17 @@ def _graph(tmp_path):
     return build_graph(checkpointer=sqlite_checkpointer(tmp_path / "cp.db"))
 
 
+def _no_evidence(monkeypatch):
+    """Isola a coleta: sem isso os testes dependem de `GITHUB_TOKEN` do
+    `.env` e de o `chroma/` local estar vazio."""
+    monkeypatch.setattr(nodes, "search_code", lambda *_a, **_k: [])
+    monkeypatch.setattr(nodes, "_fetch_history", lambda *_a, **_k: [])
+    monkeypatch.setattr(nodes, "retrieve_patterns", lambda *_a, **_k: [])
+
+
 def test_reanalyze_with_context_reruns_analysis_and_repauses(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    _no_evidence(monkeypatch)
     # Na reanálise o LLM classifica um risco a partir do contexto do revisor.
     mock_llm(
         monkeypatch,
@@ -68,6 +77,7 @@ def test_reanalyze_with_context_reruns_analysis_and_repauses(tmp_path, monkeypat
 
 
 def test_reanalyze_without_context_still_counts_the_round(tmp_path, monkeypatch):
+    _no_evidence(monkeypatch)
     mock_llm(monkeypatch, feature_type="outro", search_terms=[])
     graph = _graph(tmp_path)
     state = create_initial_state(REQUIREMENT)
@@ -99,6 +109,7 @@ def test_reviewer_context_reaches_the_analyze_impact_prompt(tmp_path, monkeypatc
         return prompt
 
     monkeypatch.setattr(nodes.prompts, "build_analyze_impact_prompt", _spy)
+    _no_evidence(monkeypatch)
     mock_llm(monkeypatch, feature_type="login", search_terms=["2fa"], requirement_text=REQUIREMENT)
     graph = _graph(tmp_path)
     state = create_initial_state(REQUIREMENT)
