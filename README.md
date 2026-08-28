@@ -8,19 +8,25 @@ Especificação completa: [docs/PRD-RADAR-Agente-Impacto-Risco.md](docs/PRD-RADA
 
 Quadro Kanban do projeto: [github.com/users/scha-chan/projects/1](https://github.com/users/scha-chan/projects/1). Evidência por card (o que foi feito, decisões, testes): [`docs/evidencias/`](docs/evidencias/).
 
-## Sumário
+## Menu
 
-1. [Descrição da solução](#descrição-da-solução)
-2. [Classificação e arquitetura](#classificação-e-arquitetura)
-3. [Cenários de uso](#cenários-de-uso)
-4. [Segurança e limites de autonomia](#segurança-e-limites-de-autonomia)
-5. [Estrutura do repositório](#estrutura-do-repositório)
-6. [Instalação e execução](#instalação-e-execução)
-7. [QA e qualidade](#qa-e-qualidade)
-8. [DevOps: pipeline, logs e anomalias](#devops-pipeline-logs-e-anomalias)
-9. [Prompts e refinamento](#prompts-e-refinamento)
-10. [Vídeo de demonstração](#vídeo-de-demonstração)
-11. [Limitações conhecidas e evolução futura](#limitações-conhecidas-e-evolução-futura)
+**Entender**
+- [Descrição da solução](#descrição-da-solução) · [continuidade do mini-projeto](#continuidade-do-mini-projeto)
+- [Classificação e arquitetura](#classificação-e-arquitetura) — [sistema híbrido](#classificação-sistema-híbrido) · [fluxo do grafo](#fluxo-do-grafo-langgraph) · [stack](#stack)
+- [Cenários de uso](#cenários-de-uso)
+- [Segurança e limites de autonomia](#segurança-e-limites-de-autonomia) — [conteúdo externo](#contra-conteúdo-externo-não-confiável) · [ação irreversível](#ação-irreversível-permissões-e-aprovação) · [humano no circuito](#humano-no-circuito) · [segredos](#segredos-e-publicação)
+
+**Rodar**
+- [Estrutura do repositório](#estrutura-do-repositório)
+- [Instalação e execução](#instalação-e-execução) — [pré-requisitos](#pré-requisitos) · [configuração](#configuração) · [testes](#rodando-os-testes) · [Docker](#executando-com-docker) · [interface](#interface-mínima) · [grafo direto](#executando-o-grafo-diretamente)
+- [Componentes internos](#componentes-internos) — [observabilidade](#observabilidade-os-três-sinais-e-uma-investigação-real) · [orçamento de execução](#orçamento-de-execução-rf-065-card-35) · [servidor MCP](#servidor-mcp) · [automação low-code (n8n)](#automação-low-code-n8n)
+
+**Avaliar**
+- [QA e qualidade](#qa-e-qualidade)
+- [DevOps: pipeline, logs e anomalias](#devops-pipeline-logs-e-anomalias)
+- [Prompts e refinamento](#prompts-e-refinamento)
+- [Vídeo de demonstração](#vídeo-de-demonstração)
+- [Limitações conhecidas e evolução futura](#limitações-conhecidas-e-evolução-futura)
 
 ---
 
@@ -96,70 +102,37 @@ sozinho ou se uma ação irreversível é autorizada.
 
 ### Fluxo do grafo (LangGraph)
 
-```
-                        Issue do GitHub
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │  extract_requirement │   LLM → Pydantic
-                   └──────────┬───────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │   guard_adversarial  │   determinístico + LLM
-                   └──────────┬───────────┘
-                              │
-                    ┌─────────┴─────────┐
-                    ▼ adversarial       ▼ ok
-              ┌──────────┐              │
-              │  block   │              │
-              └──────────┘              │
-                              ┌─────────┴─────────┬─────────────────┐
-                              ▼                   ▼                 ▼
-                     ┌────────────────┐  ┌────────────────┐  ┌──────────────┐
-                     │ search_codebase│  │  retrieve_rag  │  │ fetch_history│
-                     │  (GitHub API)  │  │   (padrões)    │  │(commits/PRs) │
-                     └────────┬───────┘  └────────┬───────┘  └──────┬───────┘
-                              └───────────────────┼─────────────────┘
-                                                  ▼
-                                      ┌───────────────────────┐
-                                      │    analyze_impact     │   LLM
-                                      └───────────┬───────────┘
-                                                  ▼
-                                      ┌───────────────────────┐
-                                      │      score_risk       │   determinístico
-                                      └───────────┬───────────┘
-                                                  ▼
-                                      ┌───────────────────────┐
-                                      │   route_by_confidence │
-                                      └───────────┬───────────┘
-                                        ┌─────────┴─────────┐
-                                        ▼                   ▼
-                            confiança ≥ threshold    confiança < threshold
-                                        │                   │
-                                        │                   ▼
-                                        │         ┌───────────────────┐
-                                        │         │  human_approval   │  interrupt
-                                        │         └─────────┬─────────┘
-                                        │            ┌──────┴──────┐
-                                        │            ▼             ▼
-                                        │        aprovado      rejeitado
-                                        │            │             │
-                                        └────────────┤             ▼
-                                                     ▼         ┌────────┐
-                                          ┌────────────────┐   │ arquiva│
-                                          │ publish_comment│   └────────┘
-                                          │  (GitHub API)  │
-                                          └────────┬───────┘
-                                                   ▼
-                                                  END
+Entrada: uma Issue do GitHub ou texto livre via `POST /analyze`.
+
+```mermaid
+flowchart TD
+    START([entrada]) --> extract[extract_requirement<br/>LLM → Pydantic]
+    extract --> guard{guard_adversarial<br/>padrão + LLM}
+    guard -->|adversarial| block[block]
+    block --> END([END])
+    guard -->|ok| search[search_codebase]
+    guard -->|ok| rag[retrieve_rag]
+    guard -->|ok| history[fetch_history]
+    search --> budget{budget_gate<br/>card 35}
+    rag --> budget
+    history --> budget
+    budget -->|orçamento ok| analyze[analyze_impact<br/>LLM · RF-04]
+    analyze --> score[score_risk<br/>determinístico · RF-05]
+    score --> decide{decide_autonomy}
+    budget -->|orçamento estourado| decide
+    decide -->|confiança alta| publish[publish_comment<br/>compõe o parecer · card 45<br/>publica na Issue · RF-08]
+    decide -->|escala| brief[brief_escalation<br/>resumo p/ o revisor · card 49]
+    brief --> approval{human_approval<br/>interrupt · card 15}
+    approval -->|aprovado| publish
+    approval -->|rejeitado / expirado| archive[archive]
+    approval -->|reanalisar + contexto · card 47| analyze
+    publish --> END
+    archive --> END
 ```
 
-Na escalação, `decide_autonomy → brief_escalation → human_approval`: o node
-`brief_escalation` (card 49) gera o resumo que o revisor lê no painel.
-`human_approval` tem uma terceira saída (card 47): **reanalisar** volta para
-`analyze_impact` com o contexto que o revisor forneceu, fechando o ciclo
-`analyze → score → decide → brief → human_approval` — limitado por `MAX_REVIEW_ROUNDS`.
+As três coletas de evidência saem de `guard_adversarial` em paralelo (fan-out via `Send` do LangGraph) e convergem em `budget_gate`.
+
+O ciclo de reanálise (`human_approval → analyze_impact`, card 47) é limitado por `MAX_REVIEW_ROUNDS` (padrão 3); `budget_gate`/`decide_autonomy` (card 35) são o backstop. `brief_escalation` (card 49) roda de novo a cada rodada, atualizando o resumo.
 
 **Requisitos de modelagem do fluxo, e onde aparecem:**
 
@@ -202,7 +175,7 @@ Detalhes completos de escopo, requisitos funcionais e cenários: seções 5, 9 e
 
 ## Cenários de uso
 
-Os quatro cenários da seção 12 do PRD, cada um com teste de integração dedicado que reproduz o comportamento real do grafo:
+Os cenários da seção 12 do PRD, cada um com um teste de integração dedicado que reproduz o comportamento real do grafo:
 
 | # | Cenário | Comportamento esperado | Teste |
 |---|---|---|---|
@@ -210,6 +183,7 @@ Os quatro cenários da seção 12 do PRD, cada um com teste de integração dedi
 | 2 | Risco alto com escalação | Risco `HIGH`, confiança abaixo do threshold → pausa (`interrupt`), aprovação retoma e publica | [`tests/integration/test_scenario_2_high_risk_escalation.py`](tests/integration/test_scenario_2_high_risk_escalation.py) |
 | 3 | Entrada adversarial (obrigatório) | Instrução embutida no requisito ("ignore as regras...") → bloqueado, nenhuma tool de escrita chamada | [`tests/integration/test_scenario_3_adversarial.py`](tests/integration/test_scenario_3_adversarial.py) |
 | 4 | Falha de integração (resiliência) | API do GitHub falha (403) → retry, fallback, confiança penalizada, escalação | [`tests/integration/test_scenario_4_resilience.py`](tests/integration/test_scenario_4_resilience.py) |
+| 5 | Orçamento de execução estourado (card 35) | `max_steps`/`MAX_WALL_TIME_SECONDS` estoura antes de `analyze_impact` → pula a análise, `risk_level` mínimo `MEDIUM`, `ESCALATED_BUDGET_EXCEEDED` | [`tests/integration/test_scenario_5_budget_exceeded.py`](tests/integration/test_scenario_5_budget_exceeded.py) |
 
 Uma execução real (não simulada em teste) reconstruída ponta a ponta, com a evidência que sustentou a decisão de autonomia, está em [`docs/evidencias/card-21-investigacao-execucao-real.md`](docs/evidencias/card-21-investigacao-execucao-real.md).
 
@@ -217,25 +191,37 @@ Uma execução real (não simulada em teste) reconstruída ponta a ponta, com a 
 
 ## Segurança e limites de autonomia
 
-Três camadas de defesa contra conteúdo externo não confiável (seção 13 do PRD), aplicadas a todo texto vindo de fora — a Issue, trechos de código, mensagens de commit:
+O RADAR lê texto que não controla (a Issue, trechos de código, mensagens de commit) e, no fim, executa **uma** ação irreversível — publicar um comentário. As quatro subseções abaixo são as garantias que impedem esse texto de virar comando e essa ação de acontecer sem lastro. Referência normativa: seção 13 do PRD.
 
-1. **Delimitação estrutural** — conteúdo externo entra no prompt dentro de um bloco delimitado, com instrução de sistema afirmando que é dado a ser analisado, nunca comando a ser obedecido.
-2. **Detecção** (card 18) — padrões conhecidos (determinístico, [`src/governance/adversarial.py`](src/governance/adversarial.py)) combinados com uma checagem por LLM quando os padrões não encontram nada.
-3. **Contenção arquitetural** — mesmo que as duas primeiras falhem, o LLM nunca decide `risk_level` nem o threshold de escalação (`src/domain/risk.py`, card 02); é essa camada que sustenta a garantia de verdade.
+### Contra conteúdo externo não confiável
 
-**Permissões de tool** (cards 10/17, [`src/governance/tool_executor.py`](src/governance/tool_executor.py)) — toda tool com efeito externo (`search_code`, `fetch_history`, `publish_comment`) precisa de uma `ToolPermission` registrada; sem ela, a chamada é recusada. `publish_comment` (a única ação irreversível) exige `approval_decision == "APPROVED"` quando `human_review_required` é verdadeiro.
+Três camadas, aplicadas a todo texto vindo de fora — inclusive o contexto que o revisor cola numa reanálise (card 47):
 
-**Escalação humana com expiração** (cards 15/16) — pareceres de baixa confiança pausam via `interrupt()` do LangGraph, preservados no checkpointer; uma aprovação que chega depois do prazo (`APPROVAL_TTL_HOURS`, padrão 24h) é descartada e o grafo arquiva sem publicar.
+1. **Delimitação estrutural** — o conteúdo externo entra no prompt dentro de um bloco marcado, com instrução de sistema dizendo que é *dado a ser analisado*, nunca comando a ser obedecido.
+2. **Detecção** (card 18, [`src/governance/adversarial.py`](src/governance/adversarial.py)) — padrões determinísticos primeiro; se não acharem nada, uma checagem por LLM cobre os casos sutis. Falha na checagem por LLM → fail-open (a camada 3 é a garantia real).
+3. **Contenção arquitetural** — mesmo que 1 e 2 falhem, o LLM **nunca** decide `risk_level` nem o threshold de escalação ([`src/domain/risk.py`](src/domain/risk.py), card 02). É esta camada que sustenta a garantia de verdade: um modelo induzido não consegue rebaixar um risco alto.
 
-**Escalação acionável** (card 47) — além de aprovar/rejeitar, o revisor pode **reanalisar**: `POST /approvals/{session_id}` com `{"decision": "REANALYZE", "context": "..."}` injeta o contexto que faltou como evidência e o grafo reexecuta `analyze_impact` (ciclo `analyze → score → decide → human_approval`, limitado por `MAX_REVIEW_ROUNDS`, padrão 3). O contexto passa por `detect_by_pattern` antes de entrar (400 se adversarial). `GET /approvals/{session_id}` devolve o parecer parcial e `gaps` — o que faltou para a análise fechar.
+O cenário 3 (obrigatório) reproduz isso ponta a ponta — instrução embutida → bloqueado, nenhuma tool de escrita chamada.
 
-**Resumo para o revisor** (card 49) — ao escalar, o node `brief_escalation` gera um `review_brief` (prompt `05-review-brief`): 2–3 frases sobre o que a mudança pede e por que escalou, mais uma sugestão do que informar numa reanálise. Aparece já em `GET /approvals` (não só no detalhe) e no topo de cada card do painel. Regenerado a cada rodada de reanálise.
+### Ação irreversível: permissões e aprovação
 
-**Resiliência do painel** (card 50) — `GET /approvals` só lista sessões cujo checkpoint ainda está pausado em `human_approval` (as escaladas cujo checkpoint foi perdido não aparecem). `POST /approvals/{session_id}` completa o state congelado com as chaves de `AgentState` que uma versão anterior do agente não gravou antes de retomar; se a retomada ainda assim falhar, responde 409 em vez de 500.
+- **Permissões de tool** (cards 10/17, [`src/governance/tool_executor.py`](src/governance/tool_executor.py)) — toda tool com efeito externo (`search_code`, `fetch_history`, `publish_comment`) precisa de uma `ToolPermission` registrada; sem ela, a chamada é recusada.
+- **Portão de publicação** — `publish_comment` (a única ação irreversível) só executa com `approval_decision == "APPROVED"` quando `human_review_required` é verdadeiro. Em `DRY_RUN` (padrão de teste) nada é publicado: o parecer é gravado em `audit/dry_run/{session_id}.md` e servido por `GET /comment/{session_id}` (card 51).
 
-**`DRY_RUN`** — com `DRY_RUN=false` (padrão) e um requisito com `issue_number`, `publish_comment` publica de verdade na Issue configurada em `GITHUB_REPO`. Deixe `DRY_RUN=true` para testar sem publicar nada; o comentário é gravado em `audit/dry_run/{session_id}.md` e servido por `GET /comment/{session_id}` (é para onde o link "Ver parecer (DRY_RUN)" da página aponta, card 51).
+### Humano no circuito
 
-Nenhum segredo é versionado — `.env` está no `.gitignore`, `.env.example` só tem chaves vazias, e o pipeline de CI roda um scan de segredos (`gitleaks`) em todo push/PR (card 25).
+Um parecer de baixa confiança ou risco crítico pausa e espera decisão humana. Não é só um sim/não:
+
+| Peça | O que faz |
+|---|---|
+| **Escalação + pausa** (cards 15/16) | `interrupt()` do LangGraph; estado preservado no checkpointer. Aprovação após `APPROVAL_TTL_HOURS` (padrão 24h) é descartada e o grafo arquiva sem publicar. |
+| **Resumo para o revisor** (card 49) | `brief_escalation` gera um `review_brief` (prompt `05-review-brief`): o que a mudança pede, por que escalou, e o que informar numa reanálise. Aparece já em `GET /approvals`. |
+| **Reanálise acionável** (card 47) | `POST /approvals/{id}` com `{"decision": "REANALYZE", "context": "..."}` injeta o contexto como evidência e reexecuta `analyze_impact`. Limite: `MAX_REVIEW_ROUNDS` (padrão 3). `GET /approvals/{id}` mostra o parecer parcial e `gaps`. |
+| **Resiliência do painel** (card 50) | `GET /approvals` só lista sessões com checkpoint vivo; `POST /approvals/{id}` completa chaves de `AgentState` de versões antigas antes de retomar e responde 409 (não 500) se a retomada falhar. |
+
+### Segredos e publicação
+
+Nenhum segredo é versionado — `.env` está no `.gitignore`, `.env.example` só tem chaves vazias, e o CI roda um scan de segredos (`gitleaks`) em todo push/PR (card 25). Com `DRY_RUN=false` e um `issue_number`, `publish_comment` publica de verdade na Issue de `GITHUB_REPO` (o `GITHUB_TOKEN` precisa ter escrita nesse repo).
 
 ---
 
@@ -329,7 +315,7 @@ docker compose up
 
 Sobe a API (`http://localhost:8000`) e o n8n (`http://localhost:5678`). O Ollama continua rodando no host (`OLLAMA_BASE_URL=http://host.docker.internal:11434` por padrão) — não é containerizado neste projeto.
 
-### Interface mínima (API + página)
+### Interface mínima
 
 ```bash
 uvicorn src.api.app:app --reload
@@ -360,6 +346,12 @@ print(resultado["requirement"].feature_type, resultado["risk_level"], resultado[
 ```
 
 Todos os nodes do grafo são reais — `analyze_impact` (card 44) e a composição do parecer final (`ImpactAnalysis` + prompt `04-compose-report`, card 45) foram as últimas peças a sair de stub. Sem `GITHUB_TOKEN`/`GITHUB_REPO` configurados, sem o modelo de embedding baixado, sem o Ollama no ar, ou se o Code/Commit Search do GitHub ainda não indexou o que foi procurado, a confiança calculada fica abaixo do threshold padrão (70) e o resultado escala para aprovação humana — degradação esperada (seção 11 do PRD), não uma falha. Quando não chega evidência nenhuma, `analyze_impact` não produz impacto nem risco: o parecer escala como **não avaliado** (`ESCALATED_NOT_ASSESSED`), com `risk_level` no piso `MEDIUM` e a tela/comentário mostrando "não avaliado" em vez de "Baixo" (card 46).
+
+---
+
+## Componentes internos
+
+Como as peças que aparecem no [fluxo do grafo](#fluxo-do-grafo-langgraph) funcionam por dentro — o que observar em execução, os limites que impedem uma execução infinita, e as duas superfícies de integração (MCP e n8n).
 
 ### Observabilidade: os três sinais e uma investigação real
 
@@ -450,7 +442,7 @@ Prompts versionados e documentados em [`docs/prompts/`](docs/prompts/): objetivo
 | [`04-compose-report.md`](docs/prompts/04-compose-report.md) | `publish_comment` (`_compose_report`) | 45 |
 | [`05-review-brief.md`](docs/prompts/05-review-brief.md) | `brief_escalation` | 49 |
 
-**Refinamento de prompt (card 32):** análise crítica de um ciclo de refinamento (problema observado, alteração aplicada, resultado antes/depois) — pendente, documentado em `docs/prompts/refinamento.md` quando o card 32 for concluído.
+**Refinamento de prompt (card 32):** [`docs/prompts/refinamento.md`](docs/prompts/refinamento.md) — análise crítica de um ciclo real: o prompt `03-analyze-impact` produzia impactos genéricos sem lastro; a correção foi tornar a citação de evidência obrigatória **e** filtrar no código os impactos que não citam nenhuma fonte coletada. Com o antes/depois e a métrica.
 
 ---
 
