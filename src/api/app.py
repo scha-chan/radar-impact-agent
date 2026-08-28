@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 
@@ -41,6 +41,12 @@ from src.observability.tracing import configure_tracing
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# Card 51: mesmo diretório que `publish_comment._write_dry_run_file` usa por
+# padrão. Em DRY_RUN (ou sem `issue_number`) o parecer é gravado aqui e
+# servido por `GET /comment/{session_id}` — um link `file://` não abre a
+# partir de uma página http.
+DRY_RUN_COMMENT_DIR = "audit/dry_run"
 
 # Card 50: chaves do `AgentState` adicionadas depois da primeira versão que
 # pausava em `human_approval`. Um checkpoint gravado por uma versão antiga
@@ -83,6 +89,16 @@ def _status_from_result(result: dict) -> AnalysisStatus:
     return "archived"
 
 
+def _comment_url(session_id: str, result: dict) -> str | None:
+    """Card 51: o `publish_comment` devolve `https://...` quando publica de
+    verdade na Issue, e `file://audit/dry_run/...` em DRY_RUN. O `file://`
+    não abre no navegador — troca pelo endpoint `GET /comment/{id}`."""
+    url = result.get("published_comment_url")
+    if url and url.startswith("file://"):
+        return f"/comment/{session_id}"
+    return url
+
+
 def _to_analyze_response(session_id: str, result: dict) -> AnalyzeResponse:
     return AnalyzeResponse(
         session_id=session_id,
@@ -92,7 +108,7 @@ def _to_analyze_response(session_id: str, result: dict) -> AnalyzeResponse:
         risk_assessed=bool(result.get("risk_assessed", True)),
         confidence=result.get("confidence"),
         human_review_required=bool(result.get("human_review_required")),
-        published_comment_url=result.get("published_comment_url"),
+        published_comment_url=_comment_url(session_id, result),
         is_adversarial=bool(result.get("is_adversarial")),
         adversarial_reason=result.get("adversarial_reason"),
     )
@@ -254,3 +270,16 @@ def get_audit_trail(session_id: str) -> list[AuditEntry]:
     if not entries:
         raise HTTPException(status_code=404, detail=f"nenhuma auditoria para {session_id!r}")
     return entries
+
+
+@app.get("/comment/{session_id}", response_class=PlainTextResponse, include_in_schema=False)
+def get_dry_run_comment(session_id: str) -> PlainTextResponse:
+    """Card 51: serve o parecer gravado em DRY_RUN
+    (`audit/dry_run/{session_id}.md`) — o link "Ver comentário publicado" da
+    página aponta para cá quando não houve publicação real na Issue."""
+    path = Path(DRY_RUN_COMMENT_DIR) / f"{session_id}.md"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"nenhum comentário para {session_id!r}")
+    return PlainTextResponse(
+        path.read_text(encoding="utf-8"), media_type="text/markdown; charset=utf-8"
+    )

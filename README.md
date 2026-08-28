@@ -233,7 +233,7 @@ Três camadas de defesa contra conteúdo externo não confiável (seção 13 do 
 
 **Resiliência do painel** (card 50) — `GET /approvals` só lista sessões cujo checkpoint ainda está pausado em `human_approval` (as escaladas cujo checkpoint foi perdido não aparecem). `POST /approvals/{session_id}` completa o state congelado com as chaves de `AgentState` que uma versão anterior do agente não gravou antes de retomar; se a retomada ainda assim falhar, responde 409 em vez de 500.
 
-**`DRY_RUN`** — com `DRY_RUN=false` (padrão) e um requisito com `issue_number`, `publish_comment` publica de verdade na Issue configurada em `GITHUB_REPO`. Deixe `DRY_RUN=true` para testar sem publicar nada; o comentário é gravado em `audit/dry_run/{session_id}.md`.
+**`DRY_RUN`** — com `DRY_RUN=false` (padrão) e um requisito com `issue_number`, `publish_comment` publica de verdade na Issue configurada em `GITHUB_REPO`. Deixe `DRY_RUN=true` para testar sem publicar nada; o comentário é gravado em `audit/dry_run/{session_id}.md` e servido por `GET /comment/{session_id}` (é para onde o link "Ver parecer (DRY_RUN)" da página aponta, card 51).
 
 Nenhum segredo é versionado — `.env` está no `.gitignore`, `.env.example` só tem chaves vazias, e o pipeline de CI roda um scan de segredos (`gitleaks`) em todo push/PR (card 25).
 
