@@ -87,14 +87,17 @@ function renderAnalyzeResult(result: AnalyzeResponse): void {
   container.append(header, dl);
 
   if (result.published_comment_url) {
+    const isDryRun = result.published_comment_url.startsWith("/comment/");
     container.append(
       el(
         "a",
         {
           href: result.published_comment_url,
+          target: "_blank",
+          rel: "noopener",
           class: "mt-3 inline-block text-sm text-rose-700 underline",
         },
-        [text("Ver comentário publicado")],
+        [text(isDryRun ? "Ver parecer (DRY_RUN)" : "Ver comentário publicado")],
       ),
     );
   }

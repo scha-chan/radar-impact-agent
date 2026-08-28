@@ -84,7 +84,7 @@ def test_analyze_publishes_automatically_with_strong_evidence(tmp_path, monkeypa
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "published"
-    assert body["published_comment_url"].startswith("file://")
+    assert body["published_comment_url"] == f"/comment/{body['session_id']}"
     assert body["human_review_required"] is False
 
 
@@ -173,7 +173,7 @@ def test_full_approval_flow_publishes_after_approval(tmp_path, monkeypatch):
     assert approve_response.status_code == 200
     approve_body = approve_response.json()
     assert approve_body["status"] == "published"
-    assert approve_body["published_comment_url"].startswith("file://")
+    assert approve_body["published_comment_url"] == f"/comment/{approve_body['session_id']}"
     assert not any(item["session_id"] == session_id for item in approvals_after)
 
 
@@ -387,3 +387,29 @@ def test_resume_failure_returns_409_not_500(tmp_path, monkeypatch):
 
     assert resp.status_code == 409
     assert "versão anterior" in resp.json()["detail"]
+
+
+# --- card 51: servir o parecer DRY_RUN por HTTP ----------------------------
+
+
+def test_analyze_response_points_comment_link_at_the_http_endpoint(tmp_path, monkeypatch):
+    _mock_happy_path_evidence(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    with TestClient(app) as client:
+        body = client.post(
+            "/analyze",
+            json={"text": "Adicionar filtro por data na listagem de pedidos, com intervalo."},
+        ).json()
+
+        assert body["published_comment_url"] == f"/comment/{body['session_id']}"
+
+        comment = client.get(body["published_comment_url"])
+        assert comment.status_code == 200
+        assert "Parecer RADAR" in comment.text
+        assert comment.headers["content-type"].startswith("text/markdown")
+
+
+def test_comment_endpoint_404_for_unknown_session(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with TestClient(app) as client:
+        assert client.get("/comment/does-not-exist").status_code == 404
