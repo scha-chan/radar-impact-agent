@@ -10,6 +10,8 @@ Quadro Kanban do projeto: [github.com/users/scha-chan/projects/1](https://github
 
 Gravação: https://youtu.be/QpxCcvVAbfQ
 
+OBS: toda a atividade foi feita no branch **develop** procure os testes nas PRs e commits desse branch.
+
 ## Sumário
 
 1. [Descrição da solução](#descrição-da-solução)
