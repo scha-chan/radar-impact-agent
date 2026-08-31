@@ -27,7 +27,7 @@
               "operator": { "type": "string", "operation": "equals" }
             },
             {
-              "leftValue": "={{$json.body.label && $json.body.label.name}}",
+              "leftValue": "={{$json.body.label}}",
               "rightValue": "analise-impacto",
               "operator": { "type": "string", "operation": "equals" }
             }
@@ -41,7 +41,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [460, 300],
-      "notes": "Filtra o evento: só segue adiante quando a Issue recebeu o label 'analise-impacto' (RF-01.3). A logica de analise/classificacao NAO mora aqui - so o roteamento do gatilho."
+      "notes": "Filtra o evento: só segue adiante quando a Issue recebeu o label 'analise-impacto' (RF-01.3). Card 52: o payload agora traz 'label' como string ('analise-impacto'), não mais como objeto {name}; a 2a condicao compara {{$json.body.label}} direto. A logica de analise/classificacao NAO mora aqui - so o roteamento do gatilho."
     },
     {
       "parameters": {
