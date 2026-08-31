@@ -1,0 +1,104 @@
+{
+  "name": "RADAR - Análise de Impacto",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "radar-analise-impacto",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "1a2b3c4d-0001-4a11-8a11-000000000001",
+      "name": "GitHub Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "radar-analise-impacto",
+      "notes": "Recebe o evento 'issues' do GitHub. Configurado no repositório (Settings > Webhooks) para disparar em 'Issues' apontando para esta URL do n8n."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "leftValue": "={{$json.body.action}}",
+              "rightValue": "labeled",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "leftValue": "={{$json.body.label}}",
+              "rightValue": "analise-impacto",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1a2b3c4d-0002-4a11-8a11-000000000002",
+      "name": "Label é analise-impacto?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "notes": "Filtra o evento: só segue adiante quando a Issue recebeu o label 'analise-impacto' (RF-01.3). Card 52: o payload agora traz 'label' como string ('analise-impacto'), não mais como objeto {name}; a 2a condicao compara {{$json.body.label}} direto. A logica de analise/classificacao NAO mora aqui - so o roteamento do gatilho."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.RADAR_API_URL}}/analyze",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"issue_number\": $json.body.issue.number, \"text\": $json.body.issue.body } }}",
+        "options": { "timeout": 60000 }
+      },
+      "id": "1a2b3c4d-0003-4a11-8a11-000000000003",
+      "name": "POST /analyze",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 220],
+      "notes": "Chama a aplicacao (card 30, endpoint ainda a implementar). Toda a logica de analise, classificacao e decisao de autonomia mora na aplicacao - o n8n so encaminha o gatilho e distribui o resultado (divisao de responsabilidade exigida pela secao 17 do PRD)."
+    },
+    {
+      "parameters": {},
+      "id": "1a2b3c4d-0005-4a11-8a11-000000000005",
+      "name": "Ignorar (label diferente)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [680, 420]
+    },
+    {
+      "parameters": {
+        "webhookUri": "={{$env.DISCORD_WEBHOOK_URL}}",
+        "content": "=**Novo parecer RADAR — Issue #{{$json.issue_number}}**\n\nNível de risco: **{{$json.risk_level}}**\nConfiança: {{$json.confidence}}\nRevisão humana necessária: {{$json.human_review_required}}\n\n🔗 Painel de aprovação: {{$env.RADAR_APPROVAL_URL}}/approvals/{{$json.session_id}}",
+        "options": {}
+      },
+      "id": "1a2b3c4d-0004-4a11-8a11-000000000004",
+      "name": "Discord",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [900, 220],
+      "notes": "Saida observavel do fluxo (card 29): card no Discord com o resumo do parecer que a aplicacao devolveu e um link direto para o painel de aprovacao (RF-07.2, card 30)."
+    }
+  ],
+  "connections": {
+    "GitHub Webhook": {
+      "main": [[{ "node": "Label é analise-impacto?", "type": "main", "index": 0 }]]
+    },
+    "Label é analise-impacto?": {
+      "main": [
+        [{ "node": "POST /analyze", "type": "main", "index": 0 }],
+        [{ "node": "Ignorar (label diferente)", "type": "main", "index": 0 }]
+      ]
+    },
+    "POST /analyze": {
+      "main": [[{ "node": "Discord", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "meta": {
+    "description": "RADAR (card 29, seção 17 do PRD): Issue com label 'analise-impacto' -> webhook do GitHub -> n8n -> POST /analyze na aplicação -> resultado distribuído como card no Discord com link para o painel de aprovação. Nenhuma lógica de análise/classificação vive aqui."
+  }
+}

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RADAR — Análise de Impacto e Risco</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          primary: {
+            50: '#fff1f2', 100: '#ffe4e6', 200: '#fecdd3', 300: '#fda4af',
+            400: '#fb7185', 500: '#f43f5e', 600: '#e11d48', 700: '#be123c',
+            800: '#9f1239', 900: '#881337',
+          },
+        },
+      },
+    },
+  };
+</script>
+</head>
+<body class="min-h-screen bg-rose-50 text-stone-800">
+<div class="mx-auto max-w-3xl px-4 py-8">
+
+  <header class="mb-8">
+    <h1 class="text-2xl font-bold text-rose-900">RADAR</h1>
+    <p class="text-sm text-stone-500">Análise de Impacto e Risco de Requisitos</p>
+  </header>
+
+  <div id="message-box" class="mb-6 hidden rounded-lg px-4 py-3 text-sm" role="alert"></div>
+
+  <section class="mb-10 rounded-xl border border-rose-100 bg-white p-6 shadow-sm">
+    <h2 class="mb-4 text-lg font-semibold text-rose-900">Submeter requisito</h2>
+    <form id="analyze-form" class="space-y-3">
+      <label class="block text-sm font-medium text-stone-600" for="text">Descrição da mudança</label>
+      <textarea
+        id="text"
+        required
+        minlength="1"
+        maxlength="8000"
+        rows="4"
+        placeholder="Descreva a mudança de requisito..."
+        class="w-full rounded-md border border-stone-300 p-3 text-sm focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+      ></textarea>
+
+      <div>
+        <label class="block text-sm font-medium text-stone-600" for="repo">Repositório do GitHub (opcional)</label>
+        <input
+          type="text"
+          id="repo"
+          placeholder="owner/repo ou https://github.com/owner/repo"
+          class="mt-1 w-full rounded-md border border-stone-300 p-2 text-sm focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+        >
+        <p class="mt-1 text-xs text-stone-400">Vazio usa o repositório configurado no servidor. Requer um GITHUB_TOKEN com acesso.</p>
+      </div>
+
+      <div class="flex items-end justify-between gap-3">
+        <div>
+          <label class="block text-sm font-medium text-stone-600" for="issue_number">Issue # (opcional)</label>
+          <input
+            type="number"
+            id="issue_number"
+            class="mt-1 w-32 rounded-md border border-stone-300 p-2 text-sm focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+          >
+        </div>
+        <button
+          id="analyze-submit"
+          type="submit"
+          class="rounded-md bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Analisar
+        </button>
+      </div>
+    </form>
+
+    <div id="analyze-result" class="mt-5 hidden rounded-lg bg-rose-50/60 p-4"></div>
+  </section>
+
+  <section class="mb-10 rounded-xl border border-rose-100 bg-white p-6 shadow-sm">
+    <div class="mb-4 flex items-center justify-between">
+      <h2 class="text-lg font-semibold text-rose-900">Aprovações pendentes</h2>
+      <button
+        id="refresh-approvals"
+        type="button"
+        class="rounded-md border border-rose-200 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50"
+      >
+        Atualizar
+      </button>
+    </div>
+    <div id="approvals-list" class="space-y-3">
+      <p class="text-sm text-stone-400">Clique em "Atualizar" para carregar.</p>
+    </div>
+  </section>
+
+  <section class="rounded-xl border border-rose-100 bg-white p-6 shadow-sm">
+    <h2 class="mb-4 text-lg font-semibold text-rose-900">Trilha de auditoria</h2>
+    <div class="flex gap-2">
+      <input
+        type="text"
+        id="audit-session-id"
+        placeholder="session_id"
+        class="flex-1 rounded-md border border-stone-300 p-2 text-sm focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+      >
+      <button
+        id="load-audit"
+        type="button"
+        class="rounded-md bg-stone-800 px-4 py-2 text-sm font-medium text-white hover:bg-stone-900"
+      >
+        Ver trilha
+      </button>
+    </div>
+    <div id="audit-result" class="mt-4 overflow-x-auto"></div>
+  </section>
+
+</div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

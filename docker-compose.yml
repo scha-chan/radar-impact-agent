@@ -1,0 +1,54 @@
+services:
+  radar:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # No Linux, "host.docker.internal" so resolve com o extra_hosts
+      # abaixo; no Docker Desktop (Windows/Mac) funciona nativamente -
+      # o Ollama roda no host, nao dentro do container (RNF-02/seção 18).
+      # Fixo (sem interpolar do .env): dentro do container "localhost" e o
+      # proprio container, nunca o host - o .env pode ter localhost para
+      # execucao fora do Docker, mas aqui tem que ser sempre o host.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      CHECKPOINT_DB_PATH: /app/data/radar_checkpoints.db
+      AUDIT_LOG_PATH: /app/data/audit/trail.jsonl
+      # Card 52: notificação do parecer -> n8n -> Discord. Fixo (sem
+      # interpolar do .env): dentro do container "localhost" é o próprio
+      # container; o n8n é alcançado pelo nome do serviço.
+      N8N_BASE_URL: http://n8n:5678
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - radar-data:/app/data
+
+  # Automação low-code (card 29, seção 17 do PRD) - webhook do GitHub ->
+  # n8n -> POST /analyze na aplicação -> resultado distribuído no Discord.
+  # Toda a lógica de análise/classificação mora na aplicação (serviço
+  # "radar" acima); o n8n só encaminha o gatilho e distribui o resultado.
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_SECURE_COOKIE=false
+      # Libera {{$env.*}} nas expressoes dos nodes (RADAR_API_URL,
+      # RADAR_APPROVAL_URL, DISCORD_WEBHOOK_URL) - o n8n recente bloqueia
+      # esse acesso por padrao ("access to env vars denied").
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # Fixo (sem interpolar do .env): comunicacao container-a-container usa
+      # o nome do servico, nao "localhost" (que seria o proprio n8n).
+      - RADAR_API_URL=http://radar:8000
+      # Este vai no card do Discord como link clicavel pelo humano, aberto
+      # no navegador do host - ai "localhost" e o certo.
+      - RADAR_APPROVAL_URL=${RADAR_APPROVAL_URL:-http://localhost:8000}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+    volumes:
+      - n8n-data:/home/node/.n8n
+
+volumes:
+  radar-data:
+  n8n-data:

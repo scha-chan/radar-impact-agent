@@ -8,13 +8,21 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .coverage
+coverage.json
 htmlcov/
+
+# Mutation testing (card 37)
+.mutmut-cache
+mutants/
+mutmut-report.xml
 
 # Environment / segredos
 .env
 
 # Dados e persistência
 *.db
+*.db-shm
+*.db-wal
 chroma/
 audit/
 

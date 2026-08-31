@@ -1,0 +1,37 @@
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+addopts = "--cov=src --cov-report=term-missing --cov-fail-under=70"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
+
+# RNF-10 (card 37): mutation testing escopado a src/domain/ e
+# src/governance/ — os módulos que o PRD (seção 15) declara como
+# candidatos naturais a maior risco.
+[tool.mutmut]
+# mutmut 3.x foi descartado para este projeto: sua instrumentação interna
+# ("trampoline") assume convenção de packaging src-layout em que "src"
+# nunca é parte do nome do módulo importado (é só um diretório físico,
+# removido do caminho de import por setuptools) — uma asserção interna
+# ("Module name starts with `src.`, which is invalid") quebra qualquer
+# projeto, como este, que importa de verdade como `from src.xxx import
+# ...` (src/ tem __init__.py, é um pacote real). mutmut 2.5.1 usa
+# reescrita de AST simples, sem essa suposição — funciona com o layout
+# real deste projeto e, como bônus, roda nativamente no Windows.
+paths_to_mutate = "src/domain/,src/governance/"
+# `runner` substitui a chamada de pytest por completo — restrita aos
+# quatro arquivos que cobrem src/domain/ e src/governance/ (mais rápido
+# que a suíte inteira por mutante) e com --no-cov porque
+# [tool.pytest.ini_options].addopts (acima) aplica --cov-fail-under=70 a
+# toda chamada de pytest, e esse subconjunto fica bem abaixo de 70% do
+# src/ inteiro.
+runner = "python -m pytest -x -q --no-cov tests/unit/test_risk.py tests/unit/test_adversarial.py tests/unit/test_permissions.py tests/unit/test_tool_executor.py"

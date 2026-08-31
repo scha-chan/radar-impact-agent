@@ -112,6 +112,11 @@ Produzir análises de impacto e risco rastreáveis para requisitos de mudança, 
 - Fluxo de aprovação humana com retomada de execução
 - Detecção e bloqueio de entrada adversarial
 - Interface mínima (API + página simples) para submissão manual e aprovação
+- Orçamento de execução explícito (passos, tempo) com degradação graciosa
+- Versionamento de agente/prompt/política propagado a logs, traces e auditoria
+- Avaliação da qualidade do próprio parecer via LLM-as-judge sobre golden set calibrado
+- Priorização de teste do próprio RADAR por score de risco computável (git) + mutation testing
+- Detecção de anomalia multivariada (Isolation Forest) e estimativa de falha calibrada (`HistGradientBoostingClassifier`), além do baseline simples já exigido pelo edital
 
 ### Fora do escopo
 
@@ -238,7 +243,8 @@ Essa separação é deliberada e é o que impede o agente de "decidir" que um ri
 | Persistência de estado | SqliteSaver (checkpointer LangGraph) |
 | Logs | structlog (JSON) |
 | Trace | OpenTelemetry (exporter console/arquivo) |
-| Testes | pytest, pytest-asyncio, respx |
+| Testes | pytest, pytest-asyncio, respx, Hypothesis (propriedade), mutmut (mutation) |
+| ML/estatística | scikit-learn (IsolationForest, HistGradientBoostingClassifier, CalibratedClassifierCV), radon (complexidade ciclomática) |
 | Lint | ruff |
 | CI | GitHub Actions |
 | Low-code | n8n (Docker local) |
@@ -257,6 +263,11 @@ class AgentState(TypedDict):
     correlation_id: str
     issue_number: int | None
 
+    # versionamento (RF-09.5) — atributo fixo propagado a log, span e auditoria
+    agent_version: str
+    prompt_version: str
+    policy_version: str
+
     # entrada
     raw_requirement: str
     requirement: Requirement | None
@@ -266,6 +277,11 @@ class AgentState(TypedDict):
     adversarial_reason: str | None
     retries_left: int
     approval_expires_at: datetime | None
+
+    # orçamento de execução (RF-06.5)
+    steps_taken: int
+    max_steps: int
+    started_at: datetime
 
     # evidência coletada (populada em paralelo)
     code_matches: list[CodeMatch]
@@ -296,6 +312,9 @@ class AgentState(TypedDict):
 {
   "session_id": "a3f9c2e1",
   "issue_number": 42,
+  "agent_version": "0.3.0",
+  "prompt_version": "03-analyze-impact@2",
+  "policy_version": "confidence-threshold@1",
   "requirement_summary": "Adicionar autenticação por 2FA no login",
   "risk_level": "HIGH",
   "confidence": 63,
@@ -384,6 +403,7 @@ class AgentState(TypedDict):
 - **RF-06.2** `confidence` < `CONFIDENCE_THRESHOLD` **ou** `risk_level` = CRITICAL → escala para aprovação
 - **RF-06.3** Entrada adversarial detectada → bloqueia, não publica, registra em auditoria
 - **RF-06.4** `CONFIDENCE_THRESHOLD` vem de variável de ambiente, valor padrão 70
+- **RF-06.5** Execução respeita orçamento explícito: `max_steps` (padrão 12) e `MAX_WALL_TIME_SECONDS` (padrão 60). Estourar qualquer um força `human_review_required=true` e `risk_level` mínimo `MEDIUM` — a execução nunca roda indefinidamente; degrada graciosamente para escalação em vez de travar
 
 ### RF-07 — Aprovação humana
 
@@ -405,12 +425,28 @@ class AgentState(TypedDict):
 - **RF-09.2** Emitir span OpenTelemetry por node, correlacionado pelo mesmo `correlation_id`
 - **RF-09.3** Gravar trilha de auditoria JSONL de toda decisão de autonomia
 - **RF-09.4** Expor `GET /audit/{session_id}` para reconstruir uma execução
+- **RF-09.5** Todo span, log e registro de auditoria carrega `agent_version`, `prompt_version` e `policy_version` como atributos fixos, lidos do `AgentState` — sem isso, uma regressão de comportamento não é rastreável até a mudança que a causou
+- **RF-09.6** Spans seguem as convenções semânticas GenAI da OpenTelemetry (`gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`/`output_tokens`, `gen_ai.tool.name`); a chamada da API ao servidor MCP propaga contexto via **W3C Trace Context** (header `traceparent`), para o span da tool aparecer como filho do span da requisição
 
 ### RF-10 — Interface mínima
 
 - **RF-10.1** Página única para submeter requisito por texto e ver o parecer
 - **RF-10.2** Painel de pareceres aguardando aprovação, com botões aprovar e rejeitar
 - **RF-10.3** Visualização da trilha de auditoria de uma sessão
+
+### RF-11 — Avaliação de qualidade do parecer (LLM-as-judge)
+
+- **RF-11.1** Golden set de no mínimo 20 pareceres (`ImpactAnalysis`) rotulados manualmente, cobrindo os quatro cenários da seção 12 e casos de fronteira
+- **RF-11.2** Avaliação em camadas: `risk_level` e `confidence` são comparados por igualdade/tolerância exata contra o golden set, sem LLM; só `requirement_summary` e `recommended_tests` (saída aberta) passam por um juiz LLM
+- **RF-11.3** O juiz aplica rubrica de um critério por chamada (ex.: "a afirmação é sustentada por uma entrada em `evidence_sources`?"), com contrato tipado `Veredito` (`criterio`, `evidencia`, `nota` 1–3, `confianca`, `abstencao`) — evidência é campo obrigatório e precede a nota
+- **RF-11.4** Calibração do juiz contra o golden set via Kappa de Cohen; kappa abaixo de 0,4 bloqueia o uso do juiz como gate até a rubrica ser revisada
+- **RF-11.5** Regressão de eval dispara no CI quando `prompt_version`, `policy_version` ou `LLM_MODEL` mudam, comparando o resultado por camada contra a execução anterior
+
+### RF-12 — Priorização de teste por risco computável
+
+- **RF-12.1** Score de probabilidade de defeito por módulo do próprio RADAR, calculado sem LLM: churn (commits nos últimos 30 dias via `git log`), complexidade ciclomática (`radon cc`), número de autores distintos e cobertura de teste — normalizados por percentil e combinados com pesos versionados em `weights.toml`
+- **RF-12.2** Score de impacto por módulo classificado por LLM (criticidade do fluxo, raio de alcance, reversibilidade) — o LLM só classifica a entrada, nunca produz o número final
+- **RF-12.3** Risco de módulo = probabilidade (computada) × impacto (classificado); usado para ordenar a fila de testes no CI e para decidir onde aplicar mutation testing (RNF-10)
 
 ---
 
@@ -426,6 +462,9 @@ class AgentState(TypedDict):
 | RNF-06 | Aplicação executável com `docker compose up` e com instruções de execução local |
 | RNF-07 | Todo texto vindo de fonte externa (Issue, código, comentário) é tratado como dado, nunca como instrução |
 | RNF-08 | Idempotência: reanalisar a mesma Issue não gera comentário duplicado |
+| RNF-09 | Nenhuma execução do grafo ultrapassa `max_steps` ou `MAX_WALL_TIME_SECONDS` sem forçar `human_review_required` (RF-06.5) |
+| RNF-10 | Mutation score acima de 60% em `src/domain/` e `src/governance/`, medido com `mutmut` |
+| RNF-11 | O classificador de probabilidade de escalação (seção 16) reporta calibração (Brier score), não só discriminação (ROC-AUC/PR-AUC) |
 
 ---
 
@@ -464,6 +503,8 @@ Começa em 100 e sofre deduções acumulativas:
 Piso em 0, teto em 100. Valor abaixo de `CONFIDENCE_THRESHOLD` dispara escalação.
 
 > Racional: a confiança mede a **qualidade da evidência disponível**, não a certeza do modelo. Pedir ao LLM que declare a própria confiança produz números não calibrados e não auditáveis.
+
+> **Nota de escopo:** esta matriz classifica o risco do **requisito analisado** (saída do RADAR). O risco usado para priorizar os **testes do próprio RADAR** é outro cálculo, com sinais computados do git em vez de probabilidade estimada por LLM — ver RF-12 e seção 15.
 
 ---
 
@@ -528,6 +569,17 @@ presentes no conteúdo analisado.
 **Entrada:** Issue #44, com a API do GitHub retornando 403 por rate limit.
 
 **Comportamento esperado:** timeout respeitado, dois retries com backoff, fallback para análise sem evidência de código, dedução de 25 pontos de confiança pela ausência de `code_matches` e mais 15 pelo fallback, escalação automática por confiança baixa.
+
+### Cenário 5 — Orçamento de execução estourado (RF-06.5)
+
+**Entrada:** Issue #45, com `retrieve_rag` e `fetch_history` respondendo lentamente o suficiente para a execução ultrapassar `max_steps` antes de `analyze_impact` concluir.
+
+**Comportamento esperado:**
+1. `steps_taken` atinge `max_steps` (ou o relógio ultrapassa `MAX_WALL_TIME_SECONDS`) antes da análise terminar
+2. O grafo interrompe o nó em execução e força `human_review_required=true`, `risk_level="MEDIUM"` (nunca deixa o requisito passar como se tivesse sido totalmente analisado)
+3. Auditoria registra decisão `ESCALATED_BUDGET_EXCEEDED`, com `steps_taken`/`max_steps` e a duração real
+
+**Resultado:** nenhuma execução roda indefinidamente nem publica parecer parcial sem sinalizar que a análise ficou incompleta.
 
 ---
 
@@ -609,6 +661,18 @@ Um registro por decisão de autonomia:
 
 Os dois sinais compartilham `session_id` e `correlation_id`. O trace OpenTelemetry usa o mesmo identificador como atributo do span raiz, permitindo reconstruir a execução completa a partir de qualquer um dos três.
 
+### Convenções semânticas e versionamento
+
+Spans seguem as **GenAI semantic conventions** da OpenTelemetry: `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`/`output_tokens`, `gen_ai.tool.name`. O span raiz de cada execução carrega `agent.version`, `prompt.version` e `policy.version` como atributos fixos (RF-09.5) — sem eles, uma regressão de comportamento não é rastreável até a mudança que a causou.
+
+A chamada HTTP entre a API e o servidor MCP propaga contexto via **W3C Trace Context** (header `traceparent`, RF-09.6), para o span da tool aparecer como filho do span da requisição, não como uma árvore desconectada.
+
+IDs de alta cardinalidade (`session_id`, `issue_number`) vivem em logs e traces, nunca como label de métrica — cardinalidade alta em métrica quebra o backend de séries temporais.
+
+### Orçamento de execução
+
+Cada execução carrega `steps_taken`/`max_steps` no state (RF-06.5), visível como atributo de span. Estourar o orçamento gera o evento `budget_exceeded` no log estruturado e a decisão `ESCALATED_BUDGET_EXCEEDED` na trilha de auditoria (cenário 5, seção 12) — o orçamento é, em si, um sinal observável, não só um limite silencioso.
+
 ### Investigação demonstrada
 
 O README deve conter uma execução real reconstruída: linha do tempo dos nodes, latência de cada um, a decisão de autonomia tomada e a evidência que a sustentou.
@@ -617,7 +681,7 @@ O README deve conter uma execução real reconstruída: linha do tempo dos nodes
 
 ## 15. QA e testes
 
-### Priorização por risco
+### Priorização por risco — comportamentos centrais (manual)
 
 | Prioridade | Cenário | Justificativa |
 |---|---|---|
@@ -626,17 +690,49 @@ O README deve conter uma execução real reconstruída: linha do tempo dos nodes
 | **P0** | `score_risk` é determinístico para a mesma entrada | Se varia, toda a governança perde valor |
 | **P1** | Falha de tool aciona fallback e reduz confiança | Resiliência declarada precisa ser real |
 | **P1** | Aprovação expirada arquiva sem publicar | Evita publicação tardia não supervisionada |
+| **P1** | Orçamento de execução estourado força escalação (cenário 5) | Execução não pode rodar indefinidamente nem publicar parecer parcial |
 | **P2** | Idempotência de reanálise | Higiene |
+
+Esta tabela prioriza os **comportamentos centrais** do produto (raciocínio manual, poucos itens, alta criticidade). Para a suíte completa do RADAR, a ordem de execução no CI vem de um score computável — ver RF-12 e a subseção seguinte.
+
+### Priorização por risco computável (RF-12)
+
+Diferente da tabela acima, a fila de testes no CI não é reordenada manualmente: um score por módulo combina **probabilidade** (computada, sem LLM) e **impacto** (classificado por LLM, nunca o número final):
+
+- **Probabilidade** — churn (`git log --since="30 days ago" --oneline -- <arquivo> | wc -l`), complexidade ciclomática (`radon cc -s`), número de autores distintos, cobertura de linha do módulo. Normalizados por percentil e combinados com pesos versionados em `quality/weights.toml`.
+- **Impacto** — o LLM classifica criticidade do fluxo, raio de alcance e reversibilidade de cada módulo; nunca calcula o score final, só alimenta a classificação de entrada (mesmo princípio da matriz da seção 11: "se dá para computar, compute").
+- **Risco de módulo = probabilidade × impacto** — decide a ordem de execução dos testes no CI e onde aplicar mutation testing (abaixo). `src/domain/risk.py` e `src/governance/` entram automaticamente no topo por serem os módulos com maior churn inicial e maior impacto declarado (decisão de autonomia).
+
+### Defesas contra teste que mente
+
+Quatro defesas aplicadas à suíte do próprio RADAR, para não confundir "passou" com "prova algo":
+
+1. **Oráculo do requisito, não da implementação** — já é estrutural: `evidence_sources` (RF-04.5) obriga toda afirmação do parecer a apontar a evidência que a sustenta; os testes de `analyze_impact` verificam a saída contra o requisito de entrada, nunca contra "o que o código retornou".
+2. **Teste precisa falhar antes de passar** — todo PR que corrige um bug ou implementa um card documenta, na descrição do PR, o teste novo rodando contra o SHA anterior e falhando (checagem de maior retorno: um teste que já passava antes da correção não prova nada sobre ela).
+3. **Propriedades e relações metamórficas** (`tests/property/`, biblioteca **Hypothesis**) — cobrem invariantes que exemplos isolados não capturam: `calculate_confidence` nunca sai de `[0, 100]` para qualquer combinação de entradas geradas; `aggregate_risk_level` nunca é menor que o maior risco individual da lista; `classify_risk` é monotônico (aumentar severidade ou probabilidade nunca reduz o `risk_level`).
+4. **Mutation testing como auditoria** (`mutmut run` sobre `src/domain/` e `src/governance/`) — cobertura de linha mede execução, mutação mede percepção. Mutation score é o gate declarado em RNF-10, não a cobertura sozinha.
 
 ### Tipos de teste
 
-- **Unitários** — matriz de risco, fórmula de confiança, detector adversarial, validador de permissões
-- **Integração** — grafo completo com GitHub mockado via `respx`, cobrindo os quatro cenários da seção 12
+- **Unitários** — matriz de risco, fórmula de confiança, detector adversarial, validador de permissões, propriedades via Hypothesis
+- **Integração** — grafo completo com GitHub mockado via `respx`, cobrindo os cinco cenários da seção 12
 - **Aceitação (E2E)** — via `TestClient` do FastAPI: submeter requisito, verificar escalação, aprovar pelo endpoint, verificar publicação em modo `DRY_RUN`
+
+### Avaliação do parecer (LLM-as-judge)
+
+Testes de estrutura (a saída valida contra `ImpactAnalysis`) não avaliam **qualidade** — dois pareceres podem ser ambos estruturalmente válidos e um deles ser inútil. RF-11 cobre essa lacuna:
+
+- **Golden set** de ≥20 pareceres rotulados manualmente (seção 12 + fronteiras)
+- **Avaliação em camadas**: `risk_level`/`confidence` comparados por igualdade/tolerância exata contra o golden set — determinístico, sem LLM. Só a saída aberta (`requirement_summary`, `recommended_tests`) passa por um juiz LLM
+- **Rubrica de um critério por chamada**, evidência obrigatória antes da nota, contrato tipado `Veredito`
+- **Calibração via Kappa de Cohen** contra o golden set; kappa < 0,4 bloqueia o juiz como gate até a rubrica ser revisada
+- **Regressão de eval no CI**: dispara quando `prompt_version`/`policy_version`/`LLM_MODEL` mudam, comparando o resultado por camada contra a execução anterior
+
+Documentar em `/docs/qa/eval-llm-judge.md` o golden set, a rubrica, o kappa calculado e pelo menos um caso em que o juiz discordou do rótulo manual (e a decisão tomada a respeito).
 
 ### Uso de IA em code review
 
-Analisar com IA um PR real do projeto — sugestão: o PR que introduz o `score_risk`, por ser o módulo de maior criticidade. Registrar em `/docs/qa/code-review-pr-N.md` o diff analisado, os apontamentos recebidos, quais foram aceitos e quais foram recusados com justificativa. Recusar apontamentos com argumento é o que demonstra validação crítica em vez de aceitação passiva.
+Analisar com IA um PR real do projeto — sugestão: o PR que introduz o `score_risk`, por ser o módulo de maior criticidade. Usar como referência o contrato `Finding` (severidade, confiança, evidência, sugestão de correção) da aula de revisão de código. Registrar em `/docs/qa/code-review-pr-N.md` o diff analisado, os apontamentos recebidos, quais foram aceitos e quais foram recusados com justificativa. Recusar apontamentos com argumento é o que demonstra validação crítica em vez de aceitação passiva.
 
 ---
 
@@ -659,17 +755,19 @@ Analisar com IA os logs de pelo menos duas etapas do pipeline (sugestão: testes
 
 ### Anomalia
 
-**Métrica monitorada:** taxa de escalação humana por janela de execuções.
+**Dataset:** 50 execuções, com dados simulados e documentados em `/docs/devops/dataset-execucoes.csv`, com a metodologia de geração declarada. Cada linha é um vetor de features por execução: `duration_ms`, `retries_used`, `confidence`, `tool_errors`, `evidence_sources_count`, `human_review_required`.
 
-**Baseline:** 20% a 40%, faixa esperada com o threshold em 70.
+**1. Baseline univariado (mantido, exigido pelo edital como "estimativa simples"):** taxa de escalação humana por janela de execuções, faixa esperada 20%–40% com o threshold em 70. Anomalia: taxa subindo consistentemente acima de 40% — interpretação: a base RAG deixou de cobrir os tipos de requisito que chegam, ou as buscas de código pararam de encontrar correspondências; em ambos os casos a confiança cai por falta de evidência, não por complexidade real.
 
-**Anomalia a detectar:** taxa de escalação subindo consistentemente acima de 40%. Interpretação: ou a base RAG deixou de cobrir os tipos de requisito que estão chegando, ou as buscas de código pararam de encontrar correspondências — em ambos os casos a confiança cai por falta de evidência, não por complexidade real.
+**2. Detecção multivariada (`src/devops/anomaly.py`):** o baseline univariado não captura combinações incomuns de sinais — ex. confiança alta com muitos retries, indício de uma tool mascarando falha. As features acima, normalizadas (`StandardScaler`), alimentam um **Isolation Forest** (`sklearn.ensemble.IsolationForest`, `contamination` configurável) treinado sobre o dataset de 50 execuções. Execuções marcadas como outlier são documentadas em `/docs/devops/anomalias-isolation-forest.md`, com o score de cada uma e a interpretação — accuracy não é métrica útil aqui (classe rara); o que importa é o orçamento de falso alarme.
 
-**Dataset:** 50 execuções, com dados simulados e documentados em `/docs/devops/dataset-execucoes.csv`, com a metodologia de geração declarada.
+### Estimativa de tendência e probabilidade de falha
 
-### Estimativa de tendência
+**1. Regressão linear simples (mantida):** sobre a taxa de escalação nas 50 execuções, projetando a janela seguinte. Se a projeção ultrapassar 50%, emitir alerta de degradação. Documentar em `/docs/devops/tendencia-risco.md` os dados, o coeficiente angular, a projeção e a conclusão.
 
-Regressão linear simples sobre a taxa de escalação nas 50 execuções, projetando a janela seguinte. Se a projeção ultrapassar 50%, emitir alerta de degradação. Documentar em `/docs/devops/tendencia-risco.md` os dados, o coeficiente angular, a projeção e a conclusão.
+**2. Classificador calibrado (`src/devops/trend_model.py`):** `HistGradientBoostingClassifier` (scikit-learn) treinado sobre o mesmo dataset e as mesmas features do Isolation Forest, para estimar a probabilidade de a próxima execução escalar para revisão humana. Calibrado com `CalibratedClassifierCV` (método sigmoid, dado o volume pequeno de 50 amostras). Reportar não só discriminação (ROC-AUC/PR-AUC), mas **calibração** (Brier score, RNF-11) — um modelo que discrimina bem mas erra a probabilidade não serve para decidir threshold.
+
+**Action gating (uso da estimativa):** se a probabilidade prevista de escalação da próxima execução ultrapassar 70%, o `CONFIDENCE_THRESHOLD` efetivo sobe temporariamente (mais conservador) até a taxa observada normalizar. É um paralelo simplificado ao padrão VALIDATE/RESTRICT/PAUSE ensinado: aqui o sistema não bloqueia execuções (RESTRICT/PAUSE), só eleva a exigência de confiança — equivalente a VALIDATE. Documentar em `/docs/devops/action-gating.md` um caso simulado em que o gating foi acionado.
 
 ---
 
@@ -723,9 +821,9 @@ Cada arquivo documenta objetivo, regras de comportamento, restrições e formato
 ### Configuração por ambiente
 
 ```bash
-LLM_PROVIDER=anthropic
-LLM_MODEL=claude-sonnet-4-6
-LLM_API_KEY=
+LLM_PROVIDER=ollama
+LLM_MODEL=mistral
+OLLAMA_BASE_URL=http://localhost:11434
 GITHUB_TOKEN=
 GITHUB_REPO=usuario/radar-impact-agent
 CONFIDENCE_THRESHOLD=70
@@ -734,6 +832,8 @@ TOOL_TIMEOUT_SECONDS=10
 MAX_RETRIES=2
 DRY_RUN=false
 ```
+
+**LLM local (Ollama).** Sem custo de API, sem chave, roda inteiramente na máquina do avaliador — `docs/PRD` e README documentam como subir o serviço (`ollama serve`) e o modelo esperado. `src/graph/llm.py` isola a fábrica do cliente atrás de `build_chat_model()`; trocar de provedor no futuro (`LLM_PROVIDER`) não exige tocar nos nodes que o consomem. Modelos testados localmente: `mistral` (mais rápido, usado como padrão) e `gemma4:12b` (mais lento, qualidade maior) — qualquer modelo com suporte a saída estruturada (`format=schema`) do Ollama serve.
 
 ### Ciclo de refinamento a documentar
 
@@ -752,13 +852,17 @@ radar-impact-agent/
 │   ├── domain/           # matriz de risco, confiança, modelos Pydantic
 │   ├── governance/       # permissões, detector adversarial, escalação
 │   ├── rag/              # ingestão, chunking, retriever
-│   ├── observability/    # structlog, audit trail, tracing
+│   ├── observability/    # structlog, audit trail, tracing, versionamento
+│   ├── eval/             # golden set, juiz LLM, calibração (Kappa) — RF-11
+│   ├── devops/           # Isolation Forest, classificador calibrado, tendência — seção 16
+│   ├── quality/          # score de risco computável (churn/complexidade) — RF-12
 │   └── api/              # FastAPI e interface mínima
 ├── knowledge/            # corpus de padrões de impacto (fonte do RAG)
 ├── tests/
 │   ├── unit/
 │   ├── integration/
-│   └── e2e/
+│   ├── e2e/
+│   └── property/         # testes baseados em propriedade (Hypothesis)
 ├── docs/
 │   ├── prompts/
 │   ├── qa/
@@ -793,6 +897,8 @@ radar-impact-agent/
 **Regra fixa:** 15 minutos por dia movimentando cards no Kanban. O critério 3 avalia a movimentação durante o desenvolvimento, verificável pelo histórico do Project.
 
 **Apólice de seguro:** gravar uma versão do vídeo no domingo, mesmo imperfeita. Vale 1,00 ponto e protege contra qualquer imprevisto na segunda.
+
+**Nota de escopo (25/08/2026).** Por decisão consciente, o PRD passou a cobrir técnicas adicionais ensinadas nas semanas 7–11 que a rubrica não exige explicitamente (versionamento em spans, orçamento de execução, priorização de teste por score computável, mutation testing, testes por propriedade, avaliação LLM-as-judge, detecção de anomalia multivariada e classificador de falha calibrado). A tabela acima cobre o núcleo mínimo de entrega dentro das 40h; os cards 35+ (seção 21) cobrem essa extensão e **podem ficar pendentes na entrega de 31/08 sem comprometer nenhum critério da rubrica** — risco aceito explicitamente, ver seção 23.
 
 ---
 
@@ -837,6 +943,18 @@ Colunas: **Backlog · A Fazer · Em Andamento · Bloqueado · Em Revisão · Con
 | 33 | Gravar e publicar o vídeo | Demonstração | Link não listado no README |
 | 34 | Merge final e submissão | Fechar entrega | `main` congelada, links no AVA |
 
+**Extensão pós-rubrica (risco aceito de pendência — ver seção 20 e 23):**
+
+| # | Card | Objetivo | Resultado esperado |
+|---|---|---|---|
+| 35 | Implementar orçamento de execução e versionamento em spans | Impedir execução sem limite e permitir rastrear regressão até a versão | RF-06.5 e RF-09.5/09.6 implementados com testes |
+| 36 | Implementar score de risco computável para priorização de testes | Substituir priorização manual por sinais do git | `quality/risk_score.py` com testes (RF-12) |
+| 37 | Mutation testing nos módulos críticos | Auditar a suíte além da cobertura de linha | `mutmut` rodando no CI, mutation score documentado (RNF-10) |
+| 38 | Testes baseados em propriedade (Hypothesis) | Cobrir invariantes de `risk.py` sem viés de exemplo | `tests/property/` com Hypothesis |
+| 39 | Golden set e avaliação LLM-as-judge do parecer | Medir qualidade do parecer, não só sua estrutura | `src/eval/` com golden set, juiz, calibração Kappa (RF-11) |
+| 40 | Detecção de anomalia com Isolation Forest | Detectar padrões multivariados que o baseline não capta | `src/devops/anomaly.py` com testes |
+| 41 | Estimativa de falha com classificador calibrado | Substituir/complementar a regressão simples por probabilidade calibrada | `src/devops/trend_model.py`, Brier score documentado (RNF-11) |
+
 ---
 
 ## 22. Mapeamento com a rubrica
@@ -860,6 +978,10 @@ Colunas: **Backlog · A Fazer · Em Andamento · Bloqueado · Em Revisão · Con
 | 15 | Análise crítica e refinamento | 0,50 | Seção 6 + `/docs/prompts/refinamento.md` |
 | | **Total** | **10,00** | |
 
+### 22.1 Técnicas adicionais sem peso direto na rubrica
+
+Os cards 35–41 implementam técnicas ensinadas no módulo que a rubrica não exige explicitamente — ela pede "uma estimativa simples" (critério 13) e "priorização com base em risco, impacto ou criticidade" (critério 12), ambos já atendidos pelo núcleo dos 34 cards originais. Os cards de extensão fortalecem os critérios 10–13 na prática (mais evidência técnica para o avaliador), mas não criam pontuação nova nem são pré-requisito de nenhum critério. É por isso que entram como primeiro item da ordem de corte abaixo.
+
 ---
 
 ## 23. Riscos do projeto e plano de corte
@@ -871,9 +993,11 @@ Colunas: **Backlog · A Fazer · Em Andamento · Bloqueado · Em Revisão · Con
 | Corpus RAG magro demais para justificar recuperação | Média | Médio | Meta mínima de 50 chunks; usar os PRDs anteriores como matéria-prima |
 | Escopo do PRD anterior contaminar o novo projeto | **Alta** | **Alto** | Apenas quatro regras reaproveitadas; as demais só como evolução futura |
 | Vídeo deixado para a última hora | Média | Alto | Gravação preliminar obrigatória no domingo |
+| Escopo ampliado além das 40h para cobrir integralmente as semanas 7–11 | **Alta** | Baixo (não toca a rubrica) | Decisão consciente de 25/08/2026: cards 35–41 podem ficar pendentes na entrega sem reduzir nota — nenhum critério obrigatório depende deles isoladamente |
 
 ### Ordem de corte se o cronograma apertar
 
+0. Cards 35–41 (extensão pós-rubrica) — cortar primeiro, em bloco ou individualmente; nenhum critério avaliado depende deles
 1. `fetch_history` — reduzir a paralelização de três para dois ramos (o critério pede "uma paralelização simples")
 2. Interface mínima além dos endpoints
 3. Enriquecimento do corpus RAG além dos 50 chunks
@@ -925,8 +1049,9 @@ Colunas: **Backlog · A Fazer · Em Andamento · Bloqueado · Em Revisão · Con
 
 - A busca de código é textual, não semântica: renomeações e abstrações escapam
 - O corpus de padrões cobre dez tipos de feature; requisitos fora deles caem em "outro" e perdem confiança
-- A probabilidade dos riscos é estimada pelo LLM, não derivada de dados históricos reais
-- O dataset de anomalia é simulado, por ausência de volume real de execuções
+- A probabilidade dos riscos **do requisito analisado** (RF-05) é estimada pelo LLM, não derivada de dados históricos reais — diferente da probabilidade de defeito **dos módulos do próprio RADAR** (RF-12), essa sim computada do git
+- O dataset de anomalia e de treino do classificador de falha é simulado (50 execuções), por ausência de volume real — Isolation Forest e `HistGradientBoostingClassifier` têm poder discriminativo real só confirmável em produção
+- O golden set de avaliação (RF-11) tem ~20 pareceres — Kappa calculado sobre amostra pequena tem alta variância; não substitui calibração contínua com dado de produção
 - Sem controle de acesso: qualquer pessoa com acesso ao painel pode aprovar
 
 ### Evolução futura
