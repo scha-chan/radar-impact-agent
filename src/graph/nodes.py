@@ -34,6 +34,7 @@ from src.governance.adversarial import AdversarialVerdict, detect_by_pattern, re
 from src.governance.permissions import PermissionDeniedError
 from src.governance.tool_executor import ToolExecutor
 from src.observability.audit import AuditRecord, read_audit_trail, record_audit
+from src.observability.notify import notify_analysis_done
 from src.graph.budget import elapsed_seconds, is_budget_exceeded
 from src.graph.escalation import describe_gaps, escalation_reason, last_escalation_decision
 from src.graph.llm import LLM_MODEL
@@ -847,6 +848,18 @@ def publish_comment(state: AgentState) -> dict:
             confidence=state["confidence"],
             tool_authorized="publish_comment",
         )
+    )
+    # Card 52: notifica o n8n (→ Discord) ao fim da análise. Best-effort e
+    # não-bloqueante — `block`/`archive` não passam por aqui, então chegar
+    # neste ponto já é "tudo ok" (parecer publicado, auto ou aprovado).
+    notify_analysis_done(
+        session_id=state["session_id"],
+        status="published",
+        risk_level=state["risk_level"],
+        confidence=state["confidence"],
+        human_review_required=state["human_review_required"],
+        parecer_markdown=body,
+        report_ref=url,
     )
     return {"analysis": analysis, "published_comment_url": url}
 

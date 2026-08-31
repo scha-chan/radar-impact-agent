@@ -4,6 +4,16 @@ from tests.helpers import close_all_sqlite_connections
 
 
 @pytest.fixture(autouse=True)
+def _disable_n8n_notify(monkeypatch):
+    """Card 52: o node `publish_comment` chama `notify_analysis_done`, que
+    por padrão dispara um POST para `http://localhost:5678`. Nos testes que
+    rodam o grafo real isso viraria uma thread de rede por publicação (e,
+    se houver um n8n de verdade rodando na máquina, um POST real). Desliga
+    por padrão; `tests/unit/test_notify.py` religa explicitamente."""
+    monkeypatch.setenv("N8N_NOTIFY", "false")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_cwd(tmp_path, monkeypatch):
     """Isola o diretório de trabalho de todo teste. A partir do card 20,
     `decide_autonomy`/`block`/`publish_comment`/`archive` gravam a trilha

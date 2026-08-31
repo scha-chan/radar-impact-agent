@@ -1,0 +1,47 @@
+{
+  "name": "RADAR - Parecer publicado (Discord)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "radar-parecer",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "2b3c4d5e-0001-4a11-8a11-000000000001",
+      "name": "Webhook parecer",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "radar-parecer",
+      "notes": "Card 52: recebe o parecer do proprio backend do RADAR ao fim de uma analise que publicou (via pagina ou auto-publish). Payload: { source: 'radar-internal', session_id, status, risk_level, confidence, human_review_required, parecer (markdown completo), report_ref }. Workflow dedicado - NAO chama POST /analyze, so distribui, para nao criar loop (app -> n8n -> app)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.DISCORD_WEBHOOK_URL}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"content\": \"**Parecer RADAR \\u2014 sess\\u00e3o \" + $json.body.session_id + \"**\\nRisco: **\" + $json.body.risk_level + \"** \\u00b7 Confian\\u00e7a: \" + $json.body.confidence + \" \\u00b7 Revis\\u00e3o humana: \" + $json.body.human_review_required + \"\\n\\n\" + $json.body.parecer.slice(0, 1800) } }}",
+        "options": {}
+      },
+      "id": "2b3c4d5e-0002-4a11-8a11-000000000002",
+      "name": "Discord (HTTP Request)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 300],
+      "notes": "O webhook do Discord e so um endpoint HTTP (mesma abordagem do guia n8n-setup.md passo 5 - o node Discord v2 nativo quebra na importacao). '.slice(0, 1800)' respeita o limite de 2000 chars do Discord. Sucesso = HTTP 204."
+    }
+  ],
+  "connections": {
+    "Webhook parecer": {
+      "main": [[{ "node": "Discord (HTTP Request)", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "meta": {
+    "description": "RADAR card 52: o backend chama POST {N8N_BASE_URL}/webhook/radar-parecer ao fim de uma analise que publicou parecer. Este workflow so renderiza o card no Discord com o texto completo do parecer (o mesmo de audit/dry_run/). Dedicado, sem IF e sem chamada de volta a aplicacao - evita loop. Complementa workflow-n8n.json (gatilho por Issue)."
+  }
+}

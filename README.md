@@ -8,6 +8,8 @@ Especificação completa: [docs/PRD-RADAR-Agente-Impacto-Risco.md](docs/PRD-RADA
 
 Quadro Kanban do projeto: [github.com/users/scha-chan/projects/1](https://github.com/users/scha-chan/projects/1). Evidência por card (o que foi feito, decisões, testes): [`docs/evidencias/`](docs/evidencias/).
 
+Gravação: https://youtu.be/QpxCcvVAbfQ
+
 ## Sumário
 
 1. [Descrição da solução](#descrição-da-solução)
@@ -178,6 +180,33 @@ Todos os nodes são instrumentados uniformemente com logs estruturados
 (`src/observability/logging.py`, card 19) e decisões de autonomia são
 registradas na trilha de auditoria (`src/observability/audit.py`, card 20) —
 ver [QA, observabilidade e DevOps](#qa-observabilidade-e-devops).
+
+---
+
+### Telas do RADAR:
+
+Risco calculado
+
+![Risco calculado](docs/guide/analise.png)
+
+Resultado Bloqueado
+
+![Resultado Bloqueado](docs/guide/bloqueado.png)
+
+Aguardando ação humana
+
+![Aguardando ação humana](docs/guide/aprovacao.png)
+
+Board n8n das issues do Github
+
+![Board n8n](docs/guide/n8n-github.png)
+
+Board n8n da publicação do parecer pelo site
+
+![Board n8n](docs/guide/n8n-parecer.png)
+
+
+---
 
 ### Stack
 
@@ -469,3 +498,37 @@ Prompts versionados e documentados em [`docs/prompts/`](docs/prompts/): objetivo
 | 41 | Classificador calibrado de probabilidade de escalação (RNF-11) e action gating | [`docs/devops/action-gating.md`](docs/devops/action-gating.md) |
 
 **Vídeo de demonstração:** card 33, pendente — vídeo de até 10 minutos, não listado no YouTube; o link entra aqui antes da submissão final (card 34).
+
+## Arquivos por bloco 
+
+###  Arquitetura e integrações
+
+| Arquivo | Resumo |
+|---|---|
+| [`src/graph/build.py`](src/graph/build.py) | Monta o grafo LangGraph a partir dos nodes de `nodes.py`. A topologia — sequencial, ramificação condicional, paralelização via `Send`, condição de parada — é a da seção 7 do PRD. Isolar a construção em `build_graph()` permitiu trocar stubs por implementações reais sem tocar na topologia. |
+| [`src/graph/state.py`](src/graph/state.py) | Contrato do grafo: `AgentState` e os modelos Pydantic que o compõem. Os modelos descrevem cada peça de evidência e a saída final (`ImpactAnalysis`), replicando o schema do PRD (seção 8). `AgentState` é um `TypedDict` porque é o formato que o LangGraph espera para estado compartilhado entre nodes. |
+| [`src/graph/nodes.py`](src/graph/nodes.py) | Nodes do grafo — cada um produz uma atualização do `AgentState`. A topologia foi montada com stubs (card 04) e as integrações reais entraram depois: LLM (`extract_requirement`, `analyze_impact`), GitHub API (`search_codebase`, `fetch_history`, `publish_comment`), ChromaDB (`retrieve_rag`), `interrupt` + checkpointer (`human_approval`), Python puro (`score_risk`), detector real (`guard_adversarial`). |
+| [`src/graph/budget.py`](src/graph/budget.py) | Orçamento de execução (card 35) — nenhuma execução roda indefinidamente. `count_step` incrementa `steps_taken` a cada node concluído (mesmo ponto único de instrumentação do log). `is_budget_exceeded` é a checagem usada tanto no roteamento condicional quanto em `decide_autonomy`. |
+| [`src/rag/retriever.py`](src/rag/retriever.py) | Tool `retrieve_patterns` (RF-03.2, card 13): recupera do RAG os padrões de impacto do tipo de feature. Usa a coleção ChromaDB ingerida por `ingest.py`, filtrando por `feature_type` (metadado) e por limiar de similaridade. Retornar nada quando a evidência é fraca penaliza a confiança em `score_risk`. |
+| [`src/mcp_server/server.py`](src/mcp_server/server.py) | Servidor MCP próprio do RADAR. Expõe as tools de integração com o GitHub e com o corpus de padrões ao agente (RF-03, RF-08), via Model Context Protocol. As tools `search_code`, `fetch_history` e `publish_comment` são registradas via `@server.tool()`. |
+
+### Segurança e limites de autonomia
+
+| Arquivo | Resumo  |
+|---|---|
+| [`src/governance/adversarial.py`](src/governance/adversarial.py) | Detector adversarial (RF-06.3, card 18). Três camadas contra instrução embutida no requisito: (1) delimitação estrutural no prompt; (2) detecção — padrões conhecidos (determinístico) + checagem por LLM quando os padrões não acham nada; (3) contenção arquitetural — `score_risk` é Python puro, o LLM nunca decide `risk_level` nem o threshold. É a camada 3 que sustenta a garantia. |
+| [`src/domain/risk.py`](src/domain/risk.py) | Matriz de risco e fórmula de confiança. Lógica pura e determinística (RF-05): mesma entrada, mesma saída. O LLM não participa desta etapa (RF-05.4) — só alimenta os dados de entrada (severidade, probabilidade, evidências). Ver PRD seção 11. |
+| [`src/governance/tool_executor.py`](src/governance/tool_executor.py) | `ToolExecutor` (card 17) — generaliza a `authorize()` a todas as tools. Centraliza a garantia a partir de um único ponto no grafo: nenhuma chamada acontece sem uma `ToolPermission` registrada. "Chamada não autorizada é recusada" deixa de depender de cada tool lembrar de chamar `authorize()` sozinha. |
+| [`src/governance/permissions.py`](src/governance/permissions.py) | Permissões de tool (RF-08.2). `ToolPermission` (nome, permissão, `destructive`, `requires_approval_when`) e `authorize()`: uma tool destrutiva cujo `requires_approval_when(state)` é verdadeiro só executa com `approval_decision == "APPROVED"` — senão, `PermissionDeniedError`. |
+| [`src/mcp_server/tools/publish_comment.py`](src/mcp_server/tools/publish_comment.py) | Tool `publish_comment` (RF-08): publica o parecer como comentário markdown na Issue. Primeira ação irreversível do RADAR; protegida por `authorize` (RF-08.2/08.3) e por `DRY_RUN` (RF-08.4). Sem retry automático — reenviar um POST após timeout arriscaria comentário duplicado numa ação não-idempotente. |
+| [`src/mcp_server/tools/search_code.py`](src/mcp_server/tools/search_code.py) | Tool `search_code` (RF-03.1): busca no repositório os termos do requisito e retorna arquivos e trechos. API de busca de código do GitHub (exige auth mesmo em repo público). RF-03.5: timeout de 10s e até 2 retries com backoff por termo; termo que esgota tentativas é pulado (fallback) — a tool nunca lança exceção para o grafo. |
+| [`src/mcp_server/tools/fetch_history.py`](src/mcp_server/tools/fetch_history.py) | Tool `fetch_history` (RF-03.3): busca commits e PRs recentes relacionados aos termos, via API do GitHub. Usa os mesmos `search_terms` de `search_code` (roda em paralelo, não pode depender do resultado dele). RF-03.5: timeout, 2 retries com backoff, combinação que esgota tentativas é pulada — nunca lança exceção. |
+
+### Low-code (n8n), duas integrações
+
+| Arquivo | Resumo  |
+|---|---|
+| [`src/observability/notify.py`](src/observability/notify.py) | Notificação best-effort do parecer para um webhook do n8n, que distribui no Discord (card 52). Fecha a lacuna do fluxo pela página, que nunca passava pelo n8n: ao fim de uma análise que publicou, o backend chama o webhook com o texto completo do parecer. Efeito colateral não-crítico — POST numa thread daemon, erro engolido, nunca propaga. Desligado com `N8N_NOTIFY=false`. |
+| [`docs/lowcode/workflow-n8n.json`](docs/lowcode/workflow-n8n.json) | Gatilho por Issue (card 29, seção 17 do PRD): Issue com label `analise-impacto` → webhook do GitHub → n8n → `POST /analyze` na aplicação → resultado distribuído como card no Discord com link para o painel de aprovação. Nenhuma lógica de análise/classificação vive aqui. |
+| [`docs/lowcode/workflow-n8n-parecer.json`](docs/lowcode/workflow-n8n-parecer.json) | Notificação do parecer (card 52): o backend chama `POST {N8N_BASE_URL}/webhook/radar-parecer` ao fim de uma análise que publicou. Este workflow só renderiza o card no Discord com o texto completo do parecer (o mesmo de `audit/dry_run/`). Dedicado, sem IF e sem chamada de volta à aplicação — evita loop. Complementa `workflow-n8n.json`. |
+| [`src/graph/nodes.py`](src/graph/nodes.py) → `publish_comment` | Node que compõe e publica o parecer. No fim, chama `notify_analysis_done(...)` (card 52): como `block` e `archive` não passam por aqui, chegar neste ponto já significa "parecer publicado, auto ou aprovado". |

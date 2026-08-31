@@ -7,6 +7,8 @@ Fluxo (seção 17 do PRD, card 29): Issue com o label `analise-impacto` → webh
 
 Workflow exportado: [`docs/lowcode/workflow-n8n.json`](../lowcode/workflow-n8n.json).
 
+**Segundo caminho até o Discord (card 52).** Uma análise submetida pela página (card 30) não passa por este workflow — o gatilho dela é `POST /analyze` direto, sem n8n. Para o card do Discord sair também nesse caso (e depois de uma aprovação no painel), o backend chama, ao fim de toda análise que publicou parecer, um webhook dedicado do n8n com o **texto completo do parecer** (o mesmo de `audit/dry_run/`). Workflow: [`docs/lowcode/workflow-n8n-parecer.json`](../lowcode/workflow-n8n-parecer.json) — `Webhook (radar-parecer)` → `HTTP Request` para o Discord, sem `IF` e sem chamada de volta a `/analyze` (evita loop). Configuração no passo 8.
+
 ## Configurando o n8n passo a passo
 
 1. **Suba os serviços** (`docker-compose.yml` já traz `radar` + `n8n`):
@@ -45,17 +47,29 @@ Workflow exportado: [`docs/lowcode/workflow-n8n.json`](../lowcode/workflow-n8n.j
 
    - Sucesso = HTTP `204`. Religue `POST /analyze` → `HTTP Request`.
 
-6. **Webhook do GitHub.** No node **GitHub Webhook**, copie a "Production URL" e cadastre em **Settings → Webhooks → Add webhook** do repositório: evento `Issues`, `Content type: application/json`. Para testar sem o GitHub, dispare um `curl` com o payload no formato do evento `issues` — **objeto único** (não array) e `label` como objeto com `.name`:
+6. **Webhook do GitHub.** No node **GitHub Webhook**, copie a "Production URL" e cadastre em **Settings → Webhooks → Add webhook** do repositório: evento `Issues`, `Content type: application/json`. Para testar sem o GitHub, dispare um `curl` com o payload no formato do evento `issues` — **objeto único** (não array) e, a partir do card 52, `label` como **string** (não mais objeto `{name}`):
 
    ```bash
    curl -X POST http://localhost:5678/webhook-test/radar-analise-impacto \
      -H 'Content-Type: application/json' \
-     -d '{"action":"labeled","label":{"name":"analise-impacto"},"issue":{"number":42,"body":"Adicionar paginação e ordenação no painel de aprovações."}}'
+     -d '{"action":"labeled","label":"analise-impacto","issue":{"number":42,"body":"Adicionar paginação e ordenação no painel de aprovações."}}'
    ```
 
    A URL `/webhook-test/...` só responde enquanto o n8n está em **Listen for test event**; a de produção é `/webhook/...` (sem `-test`), com o workflow **Active**.
 
 7. **Ative o workflow** (toggle **Active**) e crie uma Issue com o label `analise-impacto`.
+
+8. **Notificação do parecer ao fim da análise (card 52).** Importe [`docs/lowcode/workflow-n8n-parecer.json`](../lowcode/workflow-n8n-parecer.json) como um **segundo workflow**. Ele tem só `Webhook (radar-parecer)` → `HTTP Request` (Discord); o `HTTP Request` já vem com `URL = {{$env.DISCORD_WEBHOOK_URL}}` e o corpo montando o card a partir de `{{$json.body.parecer.slice(0, 1800)}}` (o `.slice` respeita o limite de 2000 chars do Discord). **Ative** o workflow e use a URL de produção (`/webhook/radar-parecer`).
+
+   No serviço `radar` (não no n8n), configure no `.env` e recrie os containers:
+
+   | Variável | Valor | Porquê |
+   |---|---|---|
+   | `N8N_NOTIFY` | `true` (padrão) | `false` desliga a notificação |
+   | `N8N_BASE_URL` | `http://n8n:5678` **dentro do compose** (padrão `http://localhost:5678` para o app fora do Docker) | `localhost` dentro do container `radar` é o próprio container |
+   | `N8N_WEBHOOK_PATH` | `webhook/radar-parecer` (padrão) | use `webhook-test/radar-parecer` só para testar com o editor em *Listen for test event* |
+
+   Para uma demo rápida sem importar workflow, aponte `N8N_WEBHOOK_PATH` para o `webhook-test` e clique em **Execute workflow** antes de cada análise (a URL de teste desregistra após 1 disparo). Falha ao notificar (n8n fora, 404 do teste desarmado, timeout) é engolida — a análise conclui normalmente e o log registra `n8n_notify_failed`.
 
 ## Problemas comuns
 
@@ -64,7 +78,8 @@ Workflow exportado: [`docs/lowcode/workflow-n8n.json`](../lowcode/workflow-n8n.j
 | Parecer volta como "risco não avaliado" | `extract_requirement` não alcança o Ollama → requisito sem `search_terms` → nenhuma evidência coletada → `analyze_impact` vazio | `OLLAMA_BASE_URL` do serviço `radar` = `host.docker.internal`, não `localhost`; Ollama no host com `mistral` e `nomic-embed-text` baixados |
 | `access to env vars denied` no node | n8n bloqueia `$env` nas expressões | `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` e recriar o container |
 | `POST /analyze` dá *connection refused* | `RADAR_API_URL` resolveu para `localhost` dentro do n8n | tem que ser `http://radar:8000` |
-| IF "Label é analise-impacto?" sempre *false* | payload de teste enviado como array `[ ... ]`, ou `label` como string | objeto único; `label` é `{ "name": "..." }`; a 2ª condição compara `{{ $json.body.label.name }}` |
+| IF "Label é analise-impacto?" sempre *false* | payload de teste enviado como array `[ ... ]`, ou `label` no formato antigo (objeto `{ "name": "..." }`) | objeto único; a partir do card 52 `label` é a **string** `"analise-impacto"` e a 2ª condição compara `{{ $json.body.label }}` |
+| Card do parecer não chega no Discord (fluxo da página) | notificação do card 52 desligada ou apontando pro lugar errado | `N8N_NOTIFY=true`; `N8N_BASE_URL=http://n8n:5678` dentro do compose; workflow `radar-parecer` importado e **Active**; ver `n8n_notify_failed` no log do serviço `radar` |
 | Node Discord: `sendLegacy: undefined` / erro de TLS | bug de importação do node Discord v2 | trocar pelo **HTTP Request** (passo 5) |
 | `webhook-test` retorna 404 | n8n não está escutando | clicar em **Listen for test event** antes do `curl`, ou usar a URL de produção com o workflow ativo |
 
